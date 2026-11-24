@@ -1,0 +1,24 @@
+[Unit]
+Description=Encrypted Seizure Diary SQLite backup
+Documentation=https://github.com/kVinB/FPKD
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=seizure-diary
+Group=seizure-diary
+ExecStart=/usr/local/bin/seizure-diary backup --retain 14
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/backups/seizure-diary
+Nice=10
+IOSchedulingClass=best-effort

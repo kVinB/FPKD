@@ -299,7 +299,7 @@ install_runtime_files() {
   local commit="$1"
   local work="$DEPLOY_HOME/repo"
 
-  log "Installing management command, updater and systemd unit"
+  log "Installing management command, updater and systemd units"
   runuser -u "$DEPLOY_USER" -- git -C "$work" show "$commit:deploy/proxmox/seizure-diary" > /usr/local/bin/seizure-diary
   chown root:root /usr/local/bin/seizure-diary
   chmod 0755 /usr/local/bin/seizure-diary
@@ -308,10 +308,13 @@ install_runtime_files() {
   chown root:root "$APP_ROOT/update.sh"
   chmod 0755 "$APP_ROOT/update.sh"
 
-  runuser -u "$DEPLOY_USER" -- git -C "$work" show "$commit:deploy/proxmox/systemd/seizure-diary.service" \
-    > "/etc/systemd/system/${SERVICE_NAME}.service"
-  chown root:root "/etc/systemd/system/${SERVICE_NAME}.service"
-  chmod 0644 "/etc/systemd/system/${SERVICE_NAME}.service"
+  local unit
+  for unit in seizure-diary.service seizure-diary-backup.service seizure-diary-backup.timer; do
+    runuser -u "$DEPLOY_USER" -- git -C "$work" show "$commit:deploy/proxmox/systemd/$unit" \
+      > "/etc/systemd/system/$unit"
+    chown root:root "/etc/systemd/system/$unit"
+    chmod 0644 "/etc/systemd/system/$unit"
+  done
 }
 
 start_and_check() {
@@ -330,6 +333,13 @@ start_and_check() {
   for _ in $(seq 1 20); do
     if curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
       log "Service is ready on 127.0.0.1:${port}"
+      if grep -Eq '^BACKUP_ENCRYPTION_KEY=.+' "$ENV_FILE"; then
+        systemctl enable --now seizure-diary-backup.timer >/dev/null 2>&1 ||
+          log "warning: could not enable the backup timer; inspect systemctl status seizure-diary-backup.timer"
+        log "Daily encrypted backup timer enabled"
+      else
+        log "Backup timer installed but not enabled: set BACKUP_ENCRYPTION_KEY in $ENV_FILE, then run systemctl enable --now seizure-diary-backup.timer"
+      fi
       return 0
     fi
     sleep 1
@@ -373,7 +383,10 @@ Next steps:
   2. Configure a private HTTPS reverse proxy and set PUBLIC_ORIGIN in
        $ENV_FILE
      then: systemctl restart $SERVICE_NAME
-  3. Set BACKUP_ENCRYPTION_KEY (base64, 32 bytes) in $ENV_FILE before relying on backups.
+  3. Set BACKUP_ENCRYPTION_KEY (base64, 32 bytes) in $ENV_FILE, then enable daily backups:
+       systemctl enable --now seizure-diary-backup.timer
+     Check: systemctl list-timers seizure-diary-backup.timer
+            journalctl -u seizure-diary-backup.service -n 50
   4. Verify LAN/WireGuard access is allowed and external access is blocked.
   5. Manage updates with: /usr/local/bin/seizure-diary update
 DONE

@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily encrypted Seizure Diary backup
+Documentation=https://github.com/kVinB/FPKD
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=seizure-diary-backup.service
+
+[Install]
+WantedBy=timers.target

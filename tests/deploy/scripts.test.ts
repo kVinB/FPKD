@@ -63,6 +63,34 @@ describe('shell entry points', () => {
     expect(update).not.toContain('git reset --hard');
   });
 
+  it('ships a daily encrypted backup timer and installs it', () => {
+    const service = fs.readFileSync(
+      path.join(root, 'deploy/proxmox/systemd/seizure-diary-backup.service'),
+      'utf8',
+    );
+    expect(service).toContain('User=seizure-diary');
+    expect(service).toContain('ExecStart=/usr/local/bin/seizure-diary backup --retain 14');
+    expect(service).toContain('ProtectSystem=strict');
+    expect(service).toContain('ReadWritePaths=/var/backups/seizure-diary');
+    expect(service).toContain('UMask=0077');
+
+    const timer = fs.readFileSync(
+      path.join(root, 'deploy/proxmox/systemd/seizure-diary-backup.timer'),
+      'utf8',
+    );
+    expect(timer).toContain('OnCalendar=*-*-* 02:30:00');
+    expect(timer).toContain('Persistent=true');
+    expect(timer).toContain('Unit=seizure-diary-backup.service');
+
+    const install = fs.readFileSync(path.join(root, 'deploy/proxmox/install-guest.sh'), 'utf8');
+    expect(install).toContain('seizure-diary-backup.timer');
+    expect(install).toContain('systemctl enable --now seizure-diary-backup.timer');
+    const update = fs.readFileSync(path.join(root, 'deploy/proxmox/update.sh'), 'utf8');
+    expect(update).toContain('seizure-diary-backup.timer');
+    const docs = fs.readFileSync(path.join(root, 'deploy/proxmox/README.md'), 'utf8');
+    expect(docs).toContain('Daily backup timer');
+  });
+
   it('ships a non-root Docker image and compose service', () => {
     const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
     expect(dockerfile).toContain('USER node');
