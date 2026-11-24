@@ -241,7 +241,13 @@ esac
     env,
     log,
     currentLink: () => fs.readlinkSync(path.join(appRoot, 'current')),
-    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (IS_ROOT) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } else {
+        spawnSync('sudo', ['-n', 'rm', '-rf', dir], { stdio: 'ignore' });
+      }
+    },
   };
 }
 
