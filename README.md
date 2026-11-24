@@ -133,7 +133,7 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, typecheck, lint, 94 unit/integration/deploy tests, production
+- **verify**: `npm ci`, typecheck, lint, 99 unit/integration/deploy tests, production
   build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
@@ -152,7 +152,7 @@ Actual commands run in this workspace and outcomes:
 ```sh
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 94 passed
+npm test                                       # 99 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
@@ -183,6 +183,9 @@ real device):
   preserve the prior revision;
 - operator CLI encrypted backup → verify → restore round-trip, including session
   revocation and retention;
+- mocked Proxmox `pct`/`pveam`/`pvesm` installer paths: dry-run makes no changes, existing
+  CTIDs are refused, ambiguous storage/bridge/static-IP input is rejected, and no
+  `pct destroy` is issued;
 - multipage PDF (40 events, long notes) with searchable text, continuation labels and
   page numbers, plus rendered-page PNGs and blank-page guards when `PDF_RENDER=1`;
 - 320 px layout with no horizontal page scroll and ≥44 px interactive controls;
