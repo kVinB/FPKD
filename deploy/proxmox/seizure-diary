@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Seizure Diary management command. Installed root-owned at /usr/local/bin/seizure-diary.
+set -euo pipefail
+
+APP_ROOT="/opt/seizure-diary"
+CURRENT="$APP_ROOT/current"
+ENV_FILE="/etc/seizure-diary/seizure-diary.env"
+INSTALL_CONF="/etc/seizure-diary/install.conf"
+SERVICE_NAME="seizure-diary"
+
+die() {
+  printf 'seizure-diary: %s\n' "$*" >&2
+  exit 1
+}
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || die "run this command as root (guest or host administrator)"
+}
+
+load_env() {
+  [ -r "$ENV_FILE" ] || die "missing $ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+}
+
+cli() {
+  [ -f "$CURRENT/dist/server/cli.js" ] || die "application is not installed at $CURRENT"
+  node "$CURRENT/dist/server/cli.js" "$@"
+}
+
+command="${1:-help}"
+shift || true
+
+case "$command" in
+  help|--help|-h)
+    cat <<'USAGE'
+Seizure Diary management command
+
+Usage: seizure-diary <command> [options]
+
+Commands:
+  update [--check]        Fetch and deploy the configured trusted ref. Runs as root.
+                          --check reports installed and upstream revisions only.
+  status                  Show service state, health, deployed commit and paths.
+  version                 Show application version and deployed commit.
+  bootstrap-admin         Create the first admin (guest-local, hidden password prompt).
+                          Extra options: --username <name> --display-label <label>
+  backup [options]        Consistent SQLite backup through the app CLI.
+                          Requires BACKUP_ENCRYPTION_KEY unless --no-encrypt (tests only).
+  migrate                 Apply pending migrations as the service user.
+  reset-password <user>   Operator recovery: set a permanent password (hidden prompt).
+  verify-backup <file>    Verify an encrypted or plain snapshot.
+  restore-backup <file>   Restore a snapshot to the configured DB path (stop service first).
+
+Which need what:
+  update, restore-backup, migrate: guest root (or pct exec from the Proxmox host).
+  bootstrap-admin, reset-password: guest root; protects the database with OS access.
+  backup, status, version: guest administrator; backup must run as the service user.
+USAGE
+    ;;
+  version)
+    cli version
+    if [ -r "$CURRENT/.deployed-commit" ]; then
+      printf 'deployed commit: %s\n' "$(cat "$CURRENT/.deployed-commit")"
+    fi
+    ;;
+  status)
+    load_env
+    printf 'service: '
+    systemctl is-active "$SERVICE_NAME" 2>/dev/null || true
+    printf 'deployed commit: %s\n' "$(cat "$CURRENT/.deployed-commit" 2>/dev/null || echo unknown)"
+    printf 'database: %s\n' "${SEIZURE_DIARY_DB_PATH:-unset}"
+    printf 'backup dir: %s\n' "${BACKUP_DIR:-unset}"
+    printf 'public origin: %s\n' "${PUBLIC_ORIGIN:-unset}"
+    if command -v curl >/dev/null 2>&1; then
+      printf 'health: '
+      curl -fsS "http://127.0.0.1:${PORT:-3000}/api/v1/health" || printf 'unreachable'
+      printf '\n'
+    fi
+    ;;
+  bootstrap-admin)
+    require_root
+    load_env
+    runuser -u seizure-diary -- env \
+      SEIZURE_DIARY_DB_PATH="$SEIZURE_DIARY_DB_PATH" \
+      NODE_ENV="$NODE_ENV" \
+      PUBLIC_ORIGIN="$PUBLIC_ORIGIN" \
+      node "$CURRENT/dist/server/cli.js" bootstrap-admin "$@"
+    ;;
+  reset-password|migrate|verify-backup|restore-backup)
+    require_root
+    load_env
+    runuser -u seizure-diary -- env \
+      SEIZURE_DIARY_DB_PATH="$SEIZURE_DIARY_DB_PATH" \
+      BACKUP_DIR="${BACKUP_DIR:-}" \
+      BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:-}" \
+      NODE_ENV="$NODE_ENV" \
+      node "$CURRENT/dist/server/cli.js" "$command" "$@"
+    ;;
+  backup)
+    load_env
+    if [ "$(id -u)" -eq 0 ]; then
+      runuser -u seizure-diary -- env \
+        SEIZURE_DIARY_DB_PATH="$SEIZURE_DIARY_DB_PATH" \
+        BACKUP_DIR="${BACKUP_DIR:-}" \
+        BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:-}" \
+        NODE_ENV="$NODE_ENV" \
+        node "$CURRENT/dist/server/cli.js" backup "$@"
+    else
+      [ "$(id -un)" = "seizure-diary" ] || die "backup must run as seizure-diary or root"
+      cli backup "$@"
+    fi
+    ;;
+  update)
+    require_root
+    [ -x "$APP_ROOT/update.sh" ] || die "missing $APP_ROOT/update.sh"
+    [ -r "$INSTALL_CONF" ] || die "missing $INSTALL_CONF"
+    exec "$APP_ROOT/update.sh" "$@"
+    ;;
+  *)
+    die "unknown command: $command (try: seizure-diary help)"
+    ;;
+esac

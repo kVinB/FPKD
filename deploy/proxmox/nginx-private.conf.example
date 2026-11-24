@@ -1,0 +1,33 @@
+# Private HTTPS reverse proxy example. Bind this only to LAN/WireGuard addresses.
+# This app must never be published to the public internet.
+server {
+    listen 10.20.0.5:443 ssl;
+    server_name diary.home.arpa;
+
+    # Certificate trusted by every family device (DNS-validated or private CA).
+    ssl_certificate     /etc/ssl/private/diary.home.arpa-fullchain.pem;
+    ssl_certificate_key /etc/ssl/private/diary.home.arpa-key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 26m;
+    proxy_read_timeout 60s;
+
+    # Limit source access at the network layer as well; DNS alone does not protect this.
+    allow 10.20.0.0/24;
+    deny all;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_cache off;
+        proxy_buffering off;
+    }
+}

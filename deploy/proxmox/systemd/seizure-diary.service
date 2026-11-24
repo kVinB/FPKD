@@ -1,0 +1,30 @@
+[Unit]
+Description=Seizure Diary (private family diary)
+Documentation=https://github.com/kVinB/FPKD
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=seizure-diary
+Group=seizure-diary
+EnvironmentFile=/etc/seizure-diary/seizure-diary.env
+WorkingDirectory=/opt/seizure-diary/current
+ExecStart=/usr/local/bin/node /opt/seizure-diary/current/dist/server/index.js
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/lib/seizure-diary /var/backups/seizure-diary
+
+[Install]
+WantedBy=multi-user.target
