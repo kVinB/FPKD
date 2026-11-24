@@ -7,6 +7,11 @@ import path from 'node:path';
 const ROOT = process.cwd();
 const INSTALL = path.join(ROOT, 'deploy/proxmox/install.sh');
 const TEMPLATE = 'local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst';
+const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
+const CAN_SUDO =
+  !IS_ROOT &&
+  spawnSync('sudo', ['-n', 'true'], { stdio: 'ignore', timeout: 10_000 }).status === 0;
+const CAN_RUN = IS_ROOT || CAN_SUDO;
 
 interface MockOptions {
   templatePresent?: boolean;
@@ -121,12 +126,38 @@ function runInstall(
   mock: MockEnv,
   args: string[],
 ): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync('bash', [INSTALL, ...args], {
-    cwd: ROOT,
-    env: mock.env,
-    encoding: 'utf8',
-    timeout: 60_000,
-  });
+  const keys = [
+    'PATH',
+    'MOCK_LOG',
+    'MOCK_TEMPLATE_PRESENT',
+    'MOCK_TEMPLATE_VOLID',
+    'MOCK_ROOTDIR_STORAGES',
+    'MOCK_BRIDGE_EXISTS',
+    ...(mock.env.MOCK_CONFLICT_ID ? ['MOCK_CONFLICT_ID'] : []),
+  ];
+  const result = IS_ROOT
+    ? spawnSync('bash', [INSTALL, ...args], {
+        cwd: ROOT,
+        env: mock.env,
+        encoding: 'utf8',
+        timeout: 60_000,
+      })
+    : spawnSync(
+        'sudo',
+        [
+          '-n',
+          'env',
+          ...keys.map((key) => `${key}=${mock.env[key] ?? ''}`),
+          'bash',
+          INSTALL,
+          ...args,
+        ],
+        {
+          cwd: ROOT,
+          encoding: 'utf8',
+          timeout: 60_000,
+        },
+      );
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -145,7 +176,7 @@ const baseArgs = [
   '10.20.0.1',
 ];
 
-describe('Proxmox host installer safe paths', () => {
+describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
   it('provisions a fresh unprivileged guest without destroying anything', () => {
     const mock = createMockEnv();
     try {
