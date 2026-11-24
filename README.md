@@ -304,8 +304,9 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
   restore were **not** run (no Proxmox/network access here). Mocked installer/updater
   paths and the GitHub release pipeline are covered by CI.
 - The Debian VM path and the private-repository token flow need real-host acceptance.
-- The GitHub Release bundle job runs only on `main` pushes; its first real asset download
-  with a private-repository token remains an operator acceptance check.
+- The GitHub Release bundle job and token-based asset download were validated on `main`
+  (`20261124.03`); the guest-local `0400` token file and real VM/LXC boot remain operator
+  acceptance checks.
 - Docker is built/smoke-tested in CI only; local Docker execution is unverified.
 - Real iPhone Safari and real devices are not verified; WebKit coverage is emulation.
 - A11 has automated axe coverage but still lacks the manual screen-reader/zoom pass in

@@ -258,9 +258,9 @@ sidecars and revokes all sessions.
   real Proxmox host**. Real VM boot, cloud-init/SSH, artifact download with a real
   token, LAN/WireGuard ingress and isolated restore remain deployment acceptance
   checks.
-- The GitHub Actions release job is configured for `main` pushes; the pull-request CI
-  job does not execute it. The first real release asset download with a private-repository
-  token must be validated by the operator.
+- The GitHub Actions release job now produces a real bundle (tag `20261124.03`) and the
+  GitHub API/asset download was validated with a repository token. The guest-local `0400`
+  token file path and real VM/LXC boot still need operator acceptance.
 - Do not use a privileged container, Docker nesting, public exposure or a
   personal token with broader scope to work around local test problems.
 - Debian/Proxmox upgrades and firewall changes are separate lifecycles.

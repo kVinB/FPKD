@@ -8,8 +8,34 @@ clinical, security-certification or performance guarantee.
 > GitHub Release bundle, and the Debian VM/LXC artifact installer were added after this
 > snapshot (see README and `deploy/proxmox/README.md`). The local suite after those
 > changes is 114 tests; the evidence below remains the recorded benchmark/browser
-> snapshot for the listed commit. VM/cloud-init, real-token release download and real
-> Proxmox/LAN/WireGuard checks remain unverified.
+> snapshot for the listed commit.
+
+## Post-snapshot runner-built release verification (2026-11-24)
+
+Merge `28ab97c` completed the CI run:
+
+- automatic tag **`20261124.03`**
+- GitHub Release **`Seizure Diary 20261124.03`**
+- assets `seizure-diary-20261124.03.tar.gz` (24,985,022 bytes) and
+  `seizure-diary-20261124.03.tar.gz.sha256`
+- all jobs passed: resolve version, typecheck/tests/browser E2E, Docker/Compose,
+  tag, and publish deployment bundle
+
+The real release download path was then exercised from this workspace with a
+repository-scoped token:
+
+```sh
+GITHUB_TOKEN="$(gh auth token)" node deploy/proxmox/release.mjs resolve \
+  --repo kVinB/FPKD --version latest
+GITHUB_TOKEN="$(gh auth token)" node deploy/proxmox/release.mjs download \
+  --repo kVinB/FPKD --version 20261124.03 --dest /tmp/opencode/release-test
+```
+
+The resolver returned version `20261124.03`; download verified the SHA-256 checksum,
+extracted the bundle, and the bundle contained `dist/server/index.js`,
+`dist/web/index.html`, `node_modules/`, `package.json`, `package-lock.json` and
+`deploy/`. This validates the private-repository API/asset path with a repository
+token, but not a real guest's `0400` token file or Proxmox VM/LXC boot.
 
 ## Environment
 
@@ -70,9 +96,10 @@ as observed numbers on these machines, not universal guarantees.
 
 ## Unverified / required before real data
 
-- Real Proxmox VM cloud-init/SSH and LXC `pct` provisioning, private-repository token
-  download and artifact updater on a disposable guest.
-- GitHub Release bundle creation/download with a real token and a real Proxmox guest.
+- Real Proxmox VM cloud-init/SSH and LXC `pct` provisioning, cloud image boot and
+  artifact updater on a disposable guest.
+- The guest-local `0400` token file path (the release API/asset download itself was
+  verified with a repository token).
 - LAN/WireGuard access allowed, external client blocked, restart persistence, encrypted
   backup restore in an isolated guest.
 - Real iPhone Safari (WebKit tests are emulation), manual VoiceOver/NVDA and 200% zoom,
