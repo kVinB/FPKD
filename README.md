@@ -144,6 +144,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs:
   timing.
 
 Project policies are in [`SECURITY.md`](./SECURITY.md) and [`AGENTS.md`](./AGENTS.md).
+Current evidence is recorded in [`docs/verification-report.md`](./docs/verification-report.md).
 Manual checks that cannot be automated are tracked in
 [`docs/manual-acceptance.md`](./docs/manual-acceptance.md) (real iPhone Safari, screen
 reader/zoom, human PDF visual review, Proxmox/LAN/WireGuard, backup/restore drill).
