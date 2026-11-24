@@ -158,12 +158,13 @@ chown root:root /usr/local/bin/seizure-diary.new
 chmod 0755 /usr/local/bin/seizure-diary.new
 mv -f /usr/local/bin/seizure-diary.new /usr/local/bin/seizure-diary
 
-runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" show \
-  "$TARGET_COMMIT:deploy/proxmox/systemd/seizure-diary.service" \
-  > "/etc/systemd/system/${SERVICE_NAME}.service.new"
-chown root:root "/etc/systemd/system/${SERVICE_NAME}.service.new"
-chmod 0644 "/etc/systemd/system/${SERVICE_NAME}.service.new"
-mv -f "/etc/systemd/system/${SERVICE_NAME}.service.new" "/etc/systemd/system/${SERVICE_NAME}.service"
+for unit in seizure-diary.service seizure-diary-backup.service seizure-diary-backup.timer; do
+  runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" show \
+    "$TARGET_COMMIT:deploy/proxmox/systemd/$unit" > "/etc/systemd/system/$unit.new"
+  chown root:root "/etc/systemd/system/$unit.new"
+  chmod 0644 "/etc/systemd/system/$unit.new"
+  mv -f "/etc/systemd/system/$unit.new" "/etc/systemd/system/$unit"
+done
 systemctl daemon-reload
 
 log "Stopping the service and taking a verified encrypted snapshot"
@@ -231,6 +232,11 @@ Inspect:
 Recover only with a verified database snapshot and the service stopped.
 FAILED
   exit 1
+fi
+
+if grep -Eq '^BACKUP_ENCRYPTION_KEY=.+' "$ENV_FILE"; then
+  systemctl enable --now seizure-diary-backup.timer >/dev/null 2>&1 ||
+    log "warning: could not enable the daily backup timer"
 fi
 
 trap - EXIT

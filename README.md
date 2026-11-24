@@ -133,7 +133,7 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, typecheck, lint, 92 unit/integration/deploy tests, production
+- **verify**: `npm ci`, typecheck, lint, 93 unit/integration/deploy tests, production
   build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
@@ -142,12 +142,16 @@ GitHub Actions (`.github/workflows/ci.yml`) runs:
 - **Benchmark** (manual `workflow_dispatch`): 10,000-event analytics and 500-entry PDF
   timing.
 
+Manual checks that cannot be automated are tracked in
+[`docs/manual-acceptance.md`](./docs/manual-acceptance.md) (real iPhone Safari, screen
+reader/zoom, human PDF visual review, Proxmox/LAN/WireGuard, backup/restore drill).
+
 Actual commands run in this workspace and outcomes:
 
 ```sh
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 92 passed
+npm test                                       # 93 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
@@ -229,9 +233,12 @@ Full details: [`deploy/proxmox/README.md`](./deploy/proxmox/README.md).
    a new one-time temporary password is shown. Give it privately; advise members to
    keep their own exports. As a last resort the operator can run
    `seizure-diary reset-password <username>` from the guest console.
-8. **Backups**: set `BACKUP_ENCRYPTION_KEY`, then run `seizure-diary backup --retain 14`.
-   Verify with `verify-backup`, move encrypted files to separate storage, and test a
-   restore in an isolated guest. Personal JSON exports are not encrypted.
+8. **Backups**: set `BACKUP_ENCRYPTION_KEY`, then enable the installed daily timer with
+   `systemctl enable --now seizure-diary-backup.timer` and run
+   `seizure-diary backup --retain 14` once manually. Check
+   `systemctl list-timers`/`journalctl -u seizure-diary-backup.service`, verify with
+   `verify-backup`, move encrypted files to separate storage, and test a restore in an
+   isolated guest. Personal JSON exports are not encrypted.
 9. **Restore**: `systemctl stop seizure-diary`; `seizure-diary restore-backup <file>
    --force`; verify integrity; start the service. Restored sessions are revoked.
 10. **Upgrades/rollback**: `seizure-diary update --check`, then `seizure-diary update`.
@@ -254,9 +261,10 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
   and isolated-restore acceptance were **not** run (no Proxmox/network access here).
 - Docker is built/smoke-tested in CI only; local Docker execution is unverified.
 - Real iPhone Safari and real devices are not verified; WebKit coverage is emulation.
-- A11 has automated axe coverage but still lacks manual screen-reader (VoiceOver/NVDA)
-  and zoomed-layout acceptance.
-- A12 has automated text/pagination/rendered-page checks; human visual sign-off remains.
+- A11 has automated axe coverage but still lacks the manual screen-reader/zoom pass in
+  [`docs/manual-acceptance.md`](./docs/manual-acceptance.md).
+- A12 has automated text/pagination/rendered-page checks; human visual sign-off remains
+  (checklist included).
 - Performance numbers are from this workspace (10k p95 489.2 ms; 500-entry PDF 7.9 s)
   and are not universal.
 - No clinical validation, E2EE, PDF/UA conformance, or regulatory compliance is claimed.
@@ -265,8 +273,8 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
 
 P0 implementation plus CI hardening and the P1 descriptive breakdown: auth/admin, diary
 CRUD with affected areas, analytics with per-area and per-trigger/per-aura counts,
-privacy-controlled PDF, personal backup/restore/clear, operator tooling, cross-browser
-tests, 320 px layout checks, automated accessibility, PDF render guards and performance
-benchmarks. Tag counts are reported labels only, with no causal or diagnostic inference,
+privacy-controlled PDF, personal backup/restore/clear, operator tooling with a daily
+encrypted backup timer, cross-browser tests, 320 px layout checks, automated accessibility,
+PDF render guards, performance benchmarks and a manual acceptance checklist. Tag counts are reported labels only, with no causal or diagnostic inference,
 and can sum above the logged-event total. Do not deploy with real health data until the
 remaining deployment (A15) and manual accessibility/visual checks are completed.

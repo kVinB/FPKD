@@ -18,6 +18,7 @@ permissions are not end-to-end encryption.
 | `seizure-diary` | Management command installed at `/usr/local/bin/seizure-diary` |
 | `update.sh` | Manual update transaction installed at `/opt/seizure-diary/update.sh` |
 | `systemd/seizure-diary.service` | Hardened, non-root service unit |
+| `systemd/seizure-diary-backup.service` / `.timer` | Daily encrypted backup job and schedule |
 | `seizure-diary.env.example` | Reference environment (installer writes a generated secret) |
 | `nginx-private.conf.example` | Private HTTPS reverse-proxy example (LAN/WireGuard only) |
 
@@ -170,6 +171,25 @@ This uses SQLite `VACUUM INTO` into a staging file, runs `PRAGMA integrity_check
 encrypts with AES-256-GCM, sets mode `0600`, and applies retention to matching files.
 It never copies only a live WAL database. Move encrypted snapshots to separate,
 protected storage.
+
+### Daily backup timer
+
+The installer ships `seizure-diary-backup.service` and `.timer`. The installer enables the
+timer only when `BACKUP_ENCRYPTION_KEY` is present; otherwise set the key and enable it
+manually:
+
+```sh
+systemctl enable --now seizure-diary-backup.timer
+systemctl list-timers seizure-diary-backup.timer
+systemctl start seizure-diary-backup.service      # run one backup now
+journalctl -u seizure-diary-backup.service -n 100 # inspect result/failure
+```
+
+The timer runs daily at 02:30 with up to 15 minutes of randomised delay and `Persistent=true`
+so a missed run is attempted after the guest starts. It uses the same `seizure-diary backup
+--retain 14` command under the unprivileged service user. Monitor failed units/logs from
+outside the app; the app does not send notifications or telemetry. Updates reinstall the
+units and re-enable the timer only when an encryption key is configured.
 
 Verify without restoring:
 
