@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# Proxmox VE host entry point for a fresh unprivileged Debian LXC.
-# Read deploy/proxmox/README.md first. Nothing here touches host firewall,
-# networking, reverse proxies or other containers.
+# Proxmox VE host entry point. Builds a dedicated Debian guest (QEMU VM by
+# default, or an unprivileged LXC) and installs a prebuilt GitHub release
+# bundle built by GitHub Actions runners. Nothing here modifies host firewall,
+# networking, reverse proxies or other guests.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUEST_SCRIPT="$SCRIPT_DIR/install-guest.sh"
+RELEASE_TOOL="$SCRIPT_DIR/release.mjs"
 
+GUEST_TYPE="vm"
 CTID=""
 HOSTNAME="seizure-diary"
 TEMPLATE=""
 TEMPLATE_STORAGE=""
 ROOTFS_STORAGE=""
+VM_STORAGE=""
+IMAGE_DIR="/var/lib/vz/template/iso"
+SSH_PRIVATE_KEY=""
+VM_USER="debian"
 BRIDGE=""
 IP_CIDR=""
 GATEWAY=""
@@ -20,8 +27,9 @@ DNS=""
 CORES="1"
 MEMORY="2048"
 DISK="12"
-REPO_URL="https://github.com/kVinB/FPKD.git"
-REF="main"
+REPO="kVinB/FPKD"
+VERSION="latest"
+TOKEN_FILE=""
 ASSUME_YES="0"
 DRY_RUN="0"
 
@@ -38,31 +46,48 @@ usage() {
   cat <<'USAGE'
 Usage: sudo ./deploy/proxmox/install.sh [options]
 
-Provisions a fresh unprivileged Debian 12 LXC, installs Git/Node/build tools,
-clones the app, builds it, and starts systemd. Requires Proxmox VE on the host.
+Creates a dedicated Debian guest on Proxmox VE, downloads a runner-built,
+checksum-verified release bundle from GitHub, and starts it under systemd.
 
-Options:
-  --ctid <id>                 Container ID (default: next free from 200)
+Guest type:
+  --type <vm|lxc>             vm = QEMU Debian cloud-image VM (default)
+                              lxc = unprivileged Debian 12 LXC
+
+Identity and source:
+  --ctid <id>                 VMID/CTID (default: next free from 200)
   --hostname <name>           Guest hostname (default: seizure-diary)
-  --template <volid>          Downloaded template volid, e.g. local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst
-  --template-storage <id>     Storage for template download (required if not pre-downloaded)
-  --rootfs-storage <id>       Storage for the container root disk (required if ambiguous)
-  --bridge <name>             Network bridge (default: vmbr0 if it exists)
-  --ip <cidr>                 Static IPv4/prefix, e.g. 10.20.0.5/24 (default: DHCP)
+  --repo <owner/name>         GitHub repository (default: kVinB/FPKD)
+  --version latest|<tag>      Release to install (default: latest)
+  --token-file <path>         Host file with a read-only GitHub token for a
+                              private repository. Installed 0400 root in the guest.
+
+LXC options:
+  --template <volid>          Downloaded template volid
+  --template-storage <id>     Storage for template download
+  --rootfs-storage <id>       Container root storage
+
+VM options:
+  --vm-storage <id>           Storage with images support (VM disk + cloud-init)
+  --image-dir <path>          Debian cloud image cache (default: /var/lib/vz/template/iso)
+  --ssh-private-key <path>    SSH private key used to bootstrapping the VM (required)
+  --vm-user <name>            Cloud-init user (default: debian)
+
+Network:
+  --bridge <name>             Network bridge (default: vmbr0 if present)
+  --ip <cidr>                 Static IPv4/prefix (required for VM; e.g. 10.20.0.10/24)
   --gateway <ip>              Gateway for static IP
   --vlan <id>                 Optional VLAN tag (1-4094)
-  --dns <servers>             Comma-separated DNS servers (default: template DHCP/DNS)
+  --dns <servers>             Comma-separated DNS servers
+
+Resources:
   --cores <n>                 vCPUs (default: 1)
   --memory <mib>              RAM in MiB (default: 2048)
-  --disk <gib>                Root disk in GiB (default: 12)
-  --repo-url <url>            GitHub HTTPS or SSH repository URL
-  --ref <branch>              Trusted branch to deploy (default: main)
+  --disk <gib>                Disk in GiB (default: 12)
+
+Other:
   --yes                       Do not prompt for final confirmation
   --dry-run                   Validate and print the summary; make no changes and download nothing
   -h, --help                  Show this help
-
-Private SSH repositories: the guest generates a deploy key on first run and
-pauses so you can add it in GitHub. Resume with the printed pct command.
 USAGE
 }
 
@@ -72,11 +97,16 @@ need_value() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --ctid) need_value "$@"; CTID="$2"; shift 2 ;;
+    --type) need_value "$@"; GUEST_TYPE="$2"; shift 2 ;;
+    --ctid|--vmid) need_value "$@"; CTID="$2"; shift 2 ;;
     --hostname) need_value "$@"; HOSTNAME="$2"; shift 2 ;;
     --template) need_value "$@"; TEMPLATE="$2"; shift 2 ;;
     --template-storage) need_value "$@"; TEMPLATE_STORAGE="$2"; shift 2 ;;
     --rootfs-storage) need_value "$@"; ROOTFS_STORAGE="$2"; shift 2 ;;
+    --vm-storage) need_value "$@"; VM_STORAGE="$2"; shift 2 ;;
+    --image-dir) need_value "$@"; IMAGE_DIR="$2"; shift 2 ;;
+    --ssh-private-key) need_value "$@"; SSH_PRIVATE_KEY="$2"; shift 2 ;;
+    --vm-user) need_value "$@"; VM_USER="$2"; shift 2 ;;
     --bridge) need_value "$@"; BRIDGE="$2"; shift 2 ;;
     --ip) need_value "$@"; IP_CIDR="$2"; shift 2 ;;
     --gateway) need_value "$@"; GATEWAY="$2"; shift 2 ;;
@@ -85,8 +115,9 @@ while [ "$#" -gt 0 ]; do
     --cores) need_value "$@"; CORES="$2"; shift 2 ;;
     --memory) need_value "$@"; MEMORY="$2"; shift 2 ;;
     --disk) need_value "$@"; DISK="$2"; shift 2 ;;
-    --repo-url) need_value "$@"; REPO_URL="$2"; shift 2 ;;
-    --ref) need_value "$@"; REF="$2"; shift 2 ;;
+    --repo) need_value "$@"; REPO="$2"; shift 2 ;;
+    --version) need_value "$@"; VERSION="$2"; shift 2 ;;
+    --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
     --yes) ASSUME_YES="1"; shift ;;
     --dry-run) DRY_RUN="1"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -95,33 +126,36 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "run as root on the Proxmox VE host"
-command -v pct >/dev/null 2>&1 || die "pct is not available; is this a Proxmox VE host?"
-command -v pveam >/dev/null 2>&1 || die "pveam is not available; is this a Proxmox VE host?"
 command -v pvesm >/dev/null 2>&1 || die "pvesm is not available; is this a Proxmox VE host?"
-[ -x "$GUEST_SCRIPT" ] || die "guest installer not found or not executable: $GUEST_SCRIPT"
-
-case "$REPO_URL" in
-  https://github.com/*/*|git@github.com:*/*) ;;
-  *) die "only GitHub HTTPS or SSH repository URLs are accepted" ;;
+case "$GUEST_TYPE" in
+  vm)
+    command -v qm >/dev/null 2>&1 || die "qm is not available; install/update Proxmox VE"
+    command -v ssh >/dev/null 2>&1 || die "ssh client is required for VM bootstrap"
+    command -v scp >/dev/null 2>&1 || die "scp is required for VM bootstrap"
+    command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen is required for VM bootstrap"
+    command -v curl >/dev/null 2>&1 || die "curl is required to download the Debian cloud image"
+    command -v sha512sum >/dev/null 2>&1 || die "sha512sum is required for image verification"
+    ;;
+  lxc)
+    command -v pct >/dev/null 2>&1 || die "pct is not available; is this a Proxmox VE host?"
+    command -v pveam >/dev/null 2>&1 || die "pveam is not available; is this a Proxmox VE host?"
+    [ -x "$GUEST_SCRIPT" ] || die "guest installer not found or not executable: $GUEST_SCRIPT"
+    ;;
+  *)
+    die "--type must be vm or lxc"
+    ;;
 esac
-[[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || die "invalid --ref"
+[ -r "$RELEASE_TOOL" ] || die "release tool not found: $RELEASE_TOOL"
+[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--repo must be owner/name"
+if [ "$VERSION" != "latest" ] && [[ ! "$VERSION" =~ ^[0-9]{8}\.[0-9]{2}$ ]]; then
+  die "--version must be latest or YYYYMMDD.VV"
+fi
+if [ -n "$TOKEN_FILE" ]; then
+  [ -r "$TOKEN_FILE" ] || die "token file is not readable: $TOKEN_FILE"
+fi
 [[ "$CORES" =~ ^[1-9][0-9]*$ ]] || die "--cores must be a positive integer"
 [[ "$MEMORY" =~ ^[1-9][0-9]*$ ]] || die "--memory must be a positive integer"
 [[ "$DISK" =~ ^[1-9][0-9]*$ ]] || die "--disk must be a positive integer"
-
-# Rootfs storage: never assume one exists.
-mapfile -t ROOTDIR_STORAGES < <(pvesm status -content rootdir 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
-if [ "${#ROOTDIR_STORAGES[@]}" -eq 0 ]; then
-  die "no active storage supports container rootdir; configure storage first"
-fi
-if [ -n "$ROOTFS_STORAGE" ]; then
-  printf '%s\n' "${ROOTDIR_STORAGES[@]}" | grep -qx "$ROOTFS_STORAGE" ||
-    die "rootfs storage '$ROOTFS_STORAGE' does not support rootdir or is inactive"
-elif [ "${#ROOTDIR_STORAGES[@]}" -eq 1 ]; then
-  ROOTFS_STORAGE="${ROOTDIR_STORAGES[0]}"
-else
-  die "multiple rootfs storages available (${ROOTDIR_STORAGES[*]}); pass --rootfs-storage"
-fi
 
 # Bridge validation.
 if [ -z "$BRIDGE" ]; then
@@ -134,67 +168,128 @@ fi
 ip -o link show "$BRIDGE" >/dev/null 2>&1 || die "bridge '$BRIDGE' does not exist on the host"
 
 # Network settings.
-NET0="name=eth0,bridge=$BRIDGE"
+NETWORK_DESC=""
+VM_IPCONFIG=""
 if [ -n "$IP_CIDR" ]; then
   [[ "$IP_CIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[12][0-9]|3[0-2]))$ ]] ||
-    die "--ip must be IPv4/prefix, e.g. 10.20.0.5/24"
+    die "--ip must be IPv4/prefix, e.g. 10.20.0.10/24"
   [ -n "$GATEWAY" ] || die "--gateway is required with a static --ip"
   [[ "$GATEWAY" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "--gateway must be an IPv4 address"
-  NET0="$NET0,ip=$IP_CIDR,gw=$GATEWAY"
-else
-  NET0="$NET0,ip=dhcp"
+  VM_IPCONFIG="ip=$IP_CIDR,gw=$GATEWAY"
+elif [ "$GUEST_TYPE" = "vm" ]; then
+  die "VM installs require --ip <prefix> and --gateway so the host can reach the guest for bootstrap"
 fi
 if [ -n "$VLAN" ]; then
   [[ "$VLAN" =~ ^([1-9][0-9]{0,2}|[1-3][0-9]{3}|40[0-8][0-9]|409[0-4])$ ]] || die "--vlan must be 1-4094"
-  NET0="$NET0,tag=$VLAN"
 fi
 NAMESERVER=""
 if [ -n "$DNS" ]; then
   NAMESERVER="${DNS//,/ }"
 fi
 
-# CTID: validate unused, never reuse or delete.
+# Guest ID: validate unused, never reuse or delete.
 if [ -z "$CTID" ]; then
   for candidate in $(seq 200 299); do
-    if ! pct status "$candidate" >/dev/null 2>&1; then
-      CTID="$candidate"
-      break
+    if [ "$GUEST_TYPE" = "vm" ]; then
+      qm status "$candidate" >/dev/null 2>&1 || { CTID="$candidate"; break; }
+    else
+      pct status "$candidate" >/dev/null 2>&1 || { CTID="$candidate"; break; }
     fi
   done
 fi
-[ -n "$CTID" ] || die "no free CTID found in 200-299; pass --ctid"
-[[ "$CTID" =~ ^[1-9][0-9]{2,5}$ ]] || die "--ctid must be a numeric container ID"
-pct status "$CTID" >/dev/null 2>&1 && die "CTID $CTID already exists; refusing to reuse it"
+[ -n "$CTID" ] || die "no free ID found in 200-299; pass --ctid"
+[[ "$CTID" =~ ^[1-9][0-9]{2,5}$ ]] || die "--ctid must be a numeric guest ID"
+if [ "$GUEST_TYPE" = "vm" ]; then
+  qm status "$CTID" >/dev/null 2>&1 && die "VMID $CTID already exists; refusing to reuse it"
+else
+  pct status "$CTID" >/dev/null 2>&1 && die "CTID $CTID already exists; refusing to reuse it"
+fi
 
-# Template discovery. Never guess archive names.
+SSH_PUBLIC_KEY=""
+if [ "$GUEST_TYPE" = "vm" ]; then
+  [ -n "$SSH_PRIVATE_KEY" ] || die "VM installs require --ssh-private-key"
+  [ -r "$SSH_PRIVATE_KEY" ] || die "SSH private key is not readable: $SSH_PRIVATE_KEY"
+  SSH_PUBLIC_KEY="$(mktemp)"
+  if ! ssh-keygen -y -f "$SSH_PRIVATE_KEY" > "$SSH_PUBLIC_KEY" 2>/dev/null; then
+    rm -f "$SSH_PUBLIC_KEY"
+    die "could not derive a public key from $SSH_PRIVATE_KEY"
+  fi
+  trap 'rm -f "$SSH_PUBLIC_KEY"' EXIT
+  mapfile -t IMAGE_STORAGES < <(pvesm status -content images 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
+  if [ -n "$VM_STORAGE" ]; then
+    printf '%s\n' "${IMAGE_STORAGES[@]}" | grep -qx "$VM_STORAGE" ||
+      die "VM storage '$VM_STORAGE' does not support images or is inactive"
+  elif [ "${#IMAGE_STORAGES[@]}" -eq 1 ]; then
+    VM_STORAGE="${IMAGE_STORAGES[0]}"
+  else
+    die "multiple/no image storages available (${IMAGE_STORAGES[*]:-none}); pass --vm-storage"
+  fi
+else
+  mapfile -t ROOTDIR_STORAGES < <(pvesm status -content rootdir 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
+  if [ "${#ROOTDIR_STORAGES[@]}" -eq 0 ]; then
+    die "no active storage supports container rootdir; configure storage first"
+  fi
+  if [ -n "$ROOTFS_STORAGE" ]; then
+    printf '%s\n' "${ROOTDIR_STORAGES[@]}" | grep -qx "$ROOTFS_STORAGE" ||
+      die "rootfs storage '$ROOTFS_STORAGE' does not support rootdir or is inactive"
+  elif [ "${#ROOTDIR_STORAGES[@]}" -eq 1 ]; then
+    ROOTFS_STORAGE="${ROOTDIR_STORAGES[0]}"
+  else
+    die "multiple rootfs storages available (${ROOTDIR_STORAGES[*]}); pass --rootfs-storage"
+  fi
+fi
+
+# LXC template discovery. Never guess archive names.
 TEMPLATE_VOLID="$TEMPLATE"
 TEMPLATE_ARCHIVE=""
 TEMPLATE_NEEDS_DOWNLOAD="0"
-if [ -n "$TEMPLATE_VOLID" ]; then
-  pveam list 2>/dev/null | awk '{print $1}' | grep -qx "$TEMPLATE_VOLID" ||
-    die "template '$TEMPLATE_VOLID' is not present; download it with pveam first"
-else
-  TEMPLATE_VOLID="$(pveam list 2>/dev/null | awk '$1 ~ /debian-12-standard/ {print $1}' | sort -V | tail -1)"
-  if [ -z "$TEMPLATE_VOLID" ]; then
-    mapfile -t VZTMPL_STORAGES < <(pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
-    if [ -n "$TEMPLATE_STORAGE" ]; then
-      printf '%s\n' "${VZTMPL_STORAGES[@]}" | grep -qx "$TEMPLATE_STORAGE" ||
-        die "template storage '$TEMPLATE_STORAGE' does not support vztmpl or is inactive"
-    elif [ "${#VZTMPL_STORAGES[@]}" -eq 1 ]; then
-      TEMPLATE_STORAGE="${VZTMPL_STORAGES[0]}"
-    else
-      die "no downloaded Debian 12 template found; pass --template-storage (available: ${VZTMPL_STORAGES[*]:-none})"
+if [ "$GUEST_TYPE" = "lxc" ]; then
+  if [ -n "$TEMPLATE_VOLID" ]; then
+    pveam list 2>/dev/null | awk '{print $1}' | grep -qx "$TEMPLATE_VOLID" ||
+      die "template '$TEMPLATE_VOLID' is not present; download it with pveam first"
+  else
+    TEMPLATE_VOLID="$(pveam list 2>/dev/null | awk '$1 ~ /debian-12-standard/ {print $1}' | sort -V | tail -1)"
+    if [ -z "$TEMPLATE_VOLID" ]; then
+      mapfile -t VZTMPL_STORAGES < <(pvesm status -content vztmpl 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
+      if [ -n "$TEMPLATE_STORAGE" ]; then
+        printf '%s\n' "${VZTMPL_STORAGES[@]}" | grep -qx "$TEMPLATE_STORAGE" ||
+          die "template storage '$TEMPLATE_STORAGE' does not support vztmpl or is inactive"
+      elif [ "${#VZTMPL_STORAGES[@]}" -eq 1 ]; then
+        TEMPLATE_STORAGE="${VZTMPL_STORAGES[0]}"
+      else
+        die "no downloaded Debian 12 template found; pass --template-storage (available: ${VZTMPL_STORAGES[*]:-none})"
+      fi
+      TEMPLATE_ARCHIVE="$(pveam available --section system 2>/dev/null | awk '$2 ~ /^debian-12-standard/ {print $2}' | sort -V | tail -1)"
+      [ -n "$TEMPLATE_ARCHIVE" ] || die "no official debian-12-standard template is available from pveam"
+      TEMPLATE_VOLID="$TEMPLATE_STORAGE:vztmpl/$TEMPLATE_ARCHIVE"
+      TEMPLATE_NEEDS_DOWNLOAD="1"
     fi
-    TEMPLATE_ARCHIVE="$(pveam available --section system 2>/dev/null | awk '$2 ~ /^debian-12-standard/ {print $2}' | sort -V | tail -1)"
-    [ -n "$TEMPLATE_ARCHIVE" ] || die "no official debian-12-standard template is available from pveam"
-    TEMPLATE_VOLID="$TEMPLATE_STORAGE:vztmpl/$TEMPLATE_ARCHIVE"
-    TEMPLATE_NEEDS_DOWNLOAD="1"
   fi
 fi
+
+IMAGE_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+IMAGE_SUMS_URL="https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
+IMAGE_PATH="$IMAGE_DIR/debian-12-genericcloud-amd64.qcow2"
 
 INSTALLER_REV="unknown"
 if git -C "$SCRIPT_DIR/../.." rev-parse --short HEAD >/dev/null 2>&1; then
   INSTALLER_REV="$(git -C "$SCRIPT_DIR/../.." rev-parse --short HEAD)"
+fi
+
+TOKEN_DESC="none (release must be public)"
+[ -n "$TOKEN_FILE" ] && TOKEN_DESC="provided (0400 root in guest)"
+DETAIL_LINES=""
+if [ "$GUEST_TYPE" = "vm" ]; then
+  DETAIL_LINES="VM storage         : $VM_STORAGE
+Cloud image cache  : $IMAGE_DIR
+Bootstrap SSH user : $VM_USER"
+else
+  TEMPLATE_SUFFIX=""
+  if [ "$TEMPLATE_NEEDS_DOWNLOAD" = "1" ]; then
+    TEMPLATE_SUFFIX=" (will download)"
+  fi
+  DETAIL_LINES="Root filesystem    : $ROOTFS_STORAGE:$DISK GiB
+Template           : $TEMPLATE_VOLID$TEMPLATE_SUFFIX"
 fi
 
 cat <<SUMMARY
@@ -202,18 +297,20 @@ cat <<SUMMARY
 Seizure Diary Proxmox install summary
 -------------------------------------
 Installer revision : $INSTALLER_REV
-CTID               : $CTID
-Hostname           : $HOSTNAME
-Template           : $TEMPLATE_VOLID$( [ "$TEMPLATE_NEEDS_DOWNLOAD" = "1" ] && printf ' (will download %s to %s)' "$TEMPLATE_ARCHIVE" "$TEMPLATE_STORAGE")
-Root filesystem    : $ROOTFS_STORAGE:$DISK GiB
-CPU / RAM          : $CORES vCPU / $MEMORY MiB
-Network            : $NET0
-DNS                : ${NAMESERVER:-provider default}
-Repository         : $REPO_URL
-Ref                : $REF
+Guest type         : $GUEST_TYPE
+Guest ID / name    : $CTID / $HOSTNAME
+Release source     : https://github.com/$REPO
+Release version    : $VERSION
+GitHub token       : $TOKEN_DESC
+CPU / RAM / disk   : $CORES vCPU / $MEMORY MiB / $DISK GiB
+Bridge / VLAN      : $BRIDGE${VLAN:+ / $VLAN}
+Address            : ${IP_CIDR:-DHCP}
+Gateway / DNS      : ${GATEWAY:-provider default} / ${NAMESERVER:-provider default}
+$DETAIL_LINES
 
-The guest will be unprivileged. Host firewall, networking, reverse proxy and
-cluster settings are not modified. The app binds to loopback inside the guest.
+This installs a prebuilt GitHub release bundle. No application build occurs on
+the Proxmox host or guest. Host firewall, networking, reverse proxy and cluster
+settings are not modified. The app binds to loopback inside the guest.
 SUMMARY
 
 if [ "$DRY_RUN" = "1" ]; then
@@ -222,91 +319,163 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$ASSUME_YES" != "1" ]; then
-  printf '\nType "install" to create the container: '
+  printf '\nType "install" to create the guest: '
   read -r answer
   [ "$answer" = "install" ] || die "aborted by operator"
 fi
 
-if [ "$TEMPLATE_NEEDS_DOWNLOAD" = "1" ]; then
-  log "Downloading template $TEMPLATE_ARCHIVE to $TEMPLATE_STORAGE"
-  pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_ARCHIVE" || die "template download failed"
-fi
-
-log "Creating unprivileged container $CTID"
-create_args=(
-  "$CTID" "$TEMPLATE_VOLID"
-  --hostname "$HOSTNAME"
-  --cores "$CORES"
-  --memory "$MEMORY"
-  --swap 512
-  --rootfs "$ROOTFS_STORAGE:$DISK"
-  --net0 "$NET0"
-  --unprivileged 1
-  --onboot 1
-  --description "Seizure Diary"
-)
-if [ -n "$NAMESERVER" ]; then
-  create_args+=(--nameserver "$NAMESERVER")
-fi
-if ! pct create "${create_args[@]}"; then
-  die "container creation failed. Partial state: check 'pct status $CTID' and 'pct config $CTID'. This script never destroys containers."
-fi
-
-log "Starting container"
-pct start "$CTID" || die "failed to start CTID $CTID"
-
-log "Waiting for guest network"
-guest_ok="0"
-for _ in $(seq 1 30); do
-  if pct exec "$CTID" -- bash -c 'getent hosts deb.debian.org >/dev/null 2>&1 && getent hosts github.com >/dev/null 2>&1' 2>/dev/null; then
-    guest_ok="1"
-    break
+run_guest_installer_lxc() {
+  log "Staging guest installer and release tool"
+  pct push "$CTID" "$GUEST_SCRIPT" /root/install-guest.sh --perms 0755 ||
+    die "failed to push guest installer. Container $CTID is left in place."
+  pct push "$CTID" "$RELEASE_TOOL" /root/release.mjs --perms 0755 ||
+    die "failed to push release tool. Container $CTID is left in place."
+  local installer_args=(--repo "$REPO" --version "$VERSION" --non-interactive)
+  if [ -n "$TOKEN_FILE" ]; then
+    pct push "$CTID" "$TOKEN_FILE" /root/github-token --perms 0600 ||
+      die "failed to push GitHub token. Container $CTID is left in place."
+    installer_args+=(--token-file /root/github-token)
   fi
-  sleep 2
-done
-if [ "$guest_ok" != "1" ]; then
-  die "guest did not reach DNS/internet for apt and Git. Container $CTID was left running; inspect networking, then re-run: pct exec $CTID -- bash /root/install-guest.sh --repo-url '$REPO_URL' --ref '$REF'"
-fi
+  log "Downloading and starting the runner-built release in the container"
+  set +e
+  pct exec "$CTID" -- bash /root/install-guest.sh "${installer_args[@]}"
+  local status=$?
+  set -e
+  return "$status"
+}
 
-log "Staging guest installer"
-pct push "$CTID" "$GUEST_SCRIPT" /root/install-guest.sh --perms 0755 ||
-  die "failed to push guest installer. Container $CTID is running; resume manually once fixed."
+run_guest_installer_vm() {
+  local ip="${IP_CIDR%%/*}"
+  local known_hosts="/root/.ssh/known_hosts_seizure-diary-${CTID}"
+  local ssh_opts=(
+    -i "$SSH_PRIVATE_KEY"
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=accept-new
+    -o "UserKnownHostsFile=$known_hosts"
+    -o ConnectTimeout=10
+  )
+  log "Waiting for SSH on $ip"
+  local ready="0"
+  for _ in $(seq 1 60); do
+    if ssh "${ssh_opts[@]}" "$VM_USER@$ip" true >/dev/null 2>&1; then
+      ready="1"
+      break
+    fi
+    sleep 5
+  done
+  if [ "$ready" != "1" ]; then
+    die "VM $CTID did not accept SSH at $ip. The VM is left in place; inspect its console and cloud-init."
+  fi
 
-log "Running guest bootstrap (this installs packages, Node, builds and starts the app)"
-set +e
-pct exec "$CTID" -- bash /root/install-guest.sh --repo-url "$REPO_URL" --ref "$REF" --non-interactive
-guest_status=$?
-set -e
+  log "Transferring installer and release tool"
+  local files=("$GUEST_SCRIPT" "$RELEASE_TOOL")
+  scp "${ssh_opts[@]}" "${files[@]}" "$VM_USER@$ip:/tmp/" >/dev/null ||
+    die "failed to copy installer files to VM $CTID"
+  local token_setup="true"
+  local token_remote=""
+  if [ -n "$TOKEN_FILE" ]; then
+    scp "${ssh_opts[@]}" "$TOKEN_FILE" "$VM_USER@$ip:/tmp/github-token" >/dev/null ||
+      die "failed to copy GitHub token to VM $CTID"
+    token_setup="sudo -n install -m 0600 /tmp/github-token /root/github-token && sudo -n rm -f /tmp/github-token"
+    token_remote=" --token-file /root/github-token"
+  fi
+  local remote_command
+  remote_command="sudo -n install -m 0755 /tmp/install-guest.sh /root/install-guest.sh && sudo -n install -m 0755 /tmp/release.mjs /root/release.mjs && $token_setup && sudo -n bash /root/install-guest.sh --repo '$REPO' --version '$VERSION'$token_remote --non-interactive"
+  ssh "${ssh_opts[@]}" "$VM_USER@$ip" "$remote_command" ||
+    die "guest bootstrap failed on VM $CTID. Inspect the console with: qm terminal $CTID"
+}
 
-if [ "$guest_status" -eq 2 ]; then
-  cat <<RESUME
+if [ "$GUEST_TYPE" = "lxc" ]; then
+  [ -x "$GUEST_SCRIPT" ] || die "guest installer not found: $GUEST_SCRIPT"
+  if [ "$TEMPLATE_NEEDS_DOWNLOAD" = "1" ]; then
+    log "Downloading template $TEMPLATE_ARCHIVE to $TEMPLATE_STORAGE"
+    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_ARCHIVE" || die "template download failed"
+  fi
+  log "Creating unprivileged container $CTID"
+  NET0="name=eth0,bridge=$BRIDGE"
+  if [ -n "$IP_CIDR" ]; then
+    NET0="$NET0,ip=$IP_CIDR,gw=$GATEWAY"
+  else
+    NET0="$NET0,ip=dhcp"
+  fi
+  [ -n "$VLAN" ] && NET0="$NET0,tag=$VLAN"
+  create_args=(
+    "$CTID" "$TEMPLATE_VOLID"
+    --hostname "$HOSTNAME" --cores "$CORES" --memory "$MEMORY" --swap 512
+    --rootfs "$ROOTFS_STORAGE:$DISK" --net0 "$NET0" --unprivileged 1
+    --onboot 1 --description "Seizure Diary"
+  )
+  [ -n "$NAMESERVER" ] && create_args+=(--nameserver "$NAMESERVER")
+  pct create "${create_args[@]}" || die "container creation failed. Check 'pct status $CTID'; this script never destroys containers."
+  pct start "$CTID" || die "failed to start CTID $CTID"
+  log "Waiting for guest network"
+  guest_ok="0"
+  for _ in $(seq 1 30); do
+    if pct exec "$CTID" -- bash -c 'getent hosts deb.debian.org >/dev/null 2>&1 && getent hosts github.com >/dev/null 2>&1' 2>/dev/null; then
+      guest_ok="1"; break
+    fi
+    sleep 2
+  done
+  [ "$guest_ok" = "1" ] || die "guest did not reach DNS/internet. Container $CTID is left running; inspect networking."
+  set +e
+  run_guest_installer_lxc
+  guest_status=$?
+  set -e
+  if [ "$guest_status" -ne 0 ]; then
+    die "guest bootstrap failed (exit $guest_status). Container $CTID is left in place; inspect: pct exec $CTID -- journalctl -u seizure-diary -n 100"
+  fi
+else
+  if [ "$(uname -m)" != "x86_64" ]; then
+    die "the Debian cloud image bootstrap currently supports x86_64 Proxmox hosts only"
+  fi
+  mkdir -p "$IMAGE_DIR"
+  chmod 0700 "$IMAGE_DIR"
+  log "Downloading and verifying the Debian 12 cloud image"
+  sums_tmp="$(mktemp)"
+  curl -fsSL -o "$sums_tmp" "$IMAGE_SUMS_URL" || die "could not download Debian SHA512SUMS"
+  if ! (cd "$IMAGE_DIR" && grep ' debian-12-genericcloud-amd64.qcow2$' "$sums_tmp" | sha512sum -c -) >/dev/null 2>&1; then
+    curl -fsSL -o "$IMAGE_PATH" "$IMAGE_URL" || die "could not download the Debian cloud image"
+    (cd "$IMAGE_DIR" && grep ' debian-12-genericcloud-amd64.qcow2$' "$sums_tmp" | sha512sum -c -) ||
+      die "Debian cloud image checksum verification failed"
+  fi
+  rm -f "$sums_tmp"
 
-The guest needs a read-only GitHub deploy key before it can clone the private
-repository. The public key was printed above. Add it in GitHub:
-  Repository -> Settings -> Deploy keys -> Add deploy key (read-only)
-
-Then resume without recreating the container:
-  pct exec $CTID -- bash /root/install-guest.sh --repo-url '$REPO_URL' --ref '$REF' --non-interactive --resume
-RESUME
-  exit 2
-fi
-
-if [ "$guest_status" -ne 0 ]; then
-  die "guest bootstrap failed (exit $guest_status). Container $CTID is left in place. Inspect: pct exec $CTID -- journalctl -u seizure-diary -n 100 ; re-run the guest installer after fixing."
+  log "Creating VM $CTID"
+  NET0="virtio,bridge=$BRIDGE"
+  [ -n "$VLAN" ] && NET0="$NET0,tag=$VLAN"
+  qm create "$CTID" \
+    --name "$HOSTNAME" --cores "$CORES" --memory "$MEMORY" \
+    --net0 "$NET0" --scsihw virtio-scsi-pci --ostype l26 \
+    --agent enabled=1 --serial0 socket --vga std --onboot 1 \
+    --description "Seizure Diary" ||
+    die "VM creation failed. Check 'qm config $CTID'; this script never destroys VMs."
+  qm importdisk "$CTID" "$IMAGE_PATH" "$VM_STORAGE" ||
+    die "failed to import the cloud image. VM $CTID is left in place."
+  disk_volume="$(qm config "$CTID" | awk -F': ' '/^unused0:/ {print $2}')"
+  [ -n "$disk_volume" ] || die "could not identify the imported VM disk"
+  qm set "$CTID" --scsi0 "$disk_volume" || die "could not attach the VM disk"
+  qm resize "$CTID" scsi0 "${DISK}G" >/dev/null || die "could not resize the VM disk to ${DISK}G"
+  qm set "$CTID" --ide2 "$VM_STORAGE:cloudinit" --boot order=scsi0 ||
+    die "could not configure cloud-init"
+  qm set "$CTID" --ipconfig0 "$VM_IPCONFIG" --ciuser "$VM_USER" --sshkeys "$SSH_PUBLIC_KEY" ||
+    die "could not configure cloud-init network/SSH"
+  [ -n "$NAMESERVER" ] && qm set "$CTID" --nameserver "$NAMESERVER" || true
+  qm cloudinit update "$CTID" >/dev/null
+  qm start "$CTID" || die "failed to start VM $CTID"
+  run_guest_installer_vm
 fi
 
 cat <<DONE
 
-Seizure Diary installed in CTID $CTID.
+Seizure Diary installed in $GUEST_TYPE $CTID.
 Installer revision: $INSTALLER_REV
+Release: $VERSION from https://github.com/$REPO
 
-Next steps (all from the guest console or pct exec):
-  pct exec $CTID -- /usr/local/bin/seizure-diary status
-  pct exec $CTID -- /usr/local/bin/seizure-diary bootstrap-admin --username <admin>
-  pct exec $CTID -- /usr/local/bin/seizure-diary update --check
+Next steps (guest console or host pct/qm access):
+  $( [ "$GUEST_TYPE" = "lxc" ] && printf 'pct exec %s -- /usr/local/bin/seizure-diary status' "$CTID" || printf 'SSH to the VM and run: /usr/local/bin/seizure-diary status' )
+  $( [ "$GUEST_TYPE" = "lxc" ] && printf 'pct exec %s -- /usr/local/bin/seizure-diary bootstrap-admin --username <admin>' "$CTID" || printf '/usr/local/bin/seizure-diary bootstrap-admin --username <admin>' )
 
-Then configure a private HTTPS reverse proxy (LAN or WireGuard only), set
-PUBLIC_ORIGIN in /etc/seizure-diary/seizure-diary.env, set
-BACKUP_ENCRYPTION_KEY, restart the service, and verify LAN/VPN access is
-allowed while external access is blocked.
+Then configure private HTTPS and set PUBLIC_ORIGIN; set BACKUP_ENCRYPTION_KEY,
+enable the backup timer, and verify LAN/WireGuard access while external access
+is blocked.
 DONE

@@ -35,7 +35,7 @@ compliance.
 shared/   types, schemas, time/DST, ranges/buckets, tags, backup, report model
 server/   config, SQLite/repositories, auth/admin, HTTP routes, operator CLI
 web/      React screens, SVG chart, PDF document/generator
-deploy/   Dockerfile, Compose, Proxmox LXC installer/updater, systemd, proxy example
+deploy/   Dockerfile, Compose, Proxmox VM/LXC installer, release downloader, updater
 tests/    unit, real SQLite/API integration, Playwright e2e, deploy script checks
 ```
 
@@ -131,8 +131,10 @@ Build tags use the UTC date and a two-digit build number: `YYYYMMDD.VV`, for exa
   screens.
 - Docker accepts `--build-arg BUILD_VERSION=...`; CI passes the resolved tag. A native
   build on a tagged commit uses that tag, otherwise it computes the next one for the date.
-- Tags are immutable. Do not move, delete or reuse a tag. CI creates the tag only after
-  the build and smoke checks pass; no GitHub Release is created automatically.
+- Tags are immutable. Do not move, delete or reuse a tag. CI creates the tag and then
+  publishes a GitHub Release containing `seizure-diary-<tag>.tar.gz` plus a SHA-256
+  checksum. Proxmox installs/updates download that runner-built bundle; no Git clone or
+  application build occurs on the Proxmox host/guest.
 
 ## Security and privacy boundary
 
@@ -153,12 +155,14 @@ Build tags use the UTC date and a two-digit build number: `YYYYMMDD.VV`, for exa
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, dependency audit, typecheck, lint, 110 unit/integration/deploy
+- **verify**: `npm ci`, dependency audit, typecheck, lint, 114 unit/integration/deploy
   tests, production build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
 - **docker**: non-root image build, Compose health/smoke test, private API `401` check,
   and teardown. Docker is verified in CI only (the local workspace has no Docker).
+- **release**: on successful `main` pushes, build a Debian 12 deployment bundle in
+  Docker and publish it as a GitHub Release asset for the auto-created tag.
 - **Benchmark** (manual `workflow_dispatch`): 10,000-event analytics and 500-entry PDF
   timing.
 
@@ -174,7 +178,7 @@ Actual commands run in this workspace and outcomes:
 npm run audit                                  # 0 vulnerabilities
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 110 passed
+npm test                                       # 114 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
@@ -237,46 +241,53 @@ real device):
 | A14 | Verified | Two members + admin: direct access, queries, analytics, reports, export and restore stay owner-scoped; restore/clear do not touch others. |
 | A15 | Not verified | Requires real Proxmox, LAN/WireGuard and external network checks; not available here. |
 
-## Proxmox runbook (native unprivileged Debian LXC)
+## Proxmox runbook (Debian VM or unprivileged LXC)
 
 Full details: [`deploy/proxmox/README.md`](./deploy/proxmox/README.md).
 
-1. **Persistent storage**: provision a dedicated LXC/VM with guest-local disk; never put
+1. **Persistent storage**: provision a dedicated guest with guest-local disk; never put
    SQLite on SMB/NFS. The service uses `/var/lib/seizure-diary` and
    `/var/backups/seizure-diary`; releases live under `/opt/seizure-diary`.
-2. **Install**: on the Proxmox host, review this repo, then run
-   `sudo ./deploy/proxmox/install.sh --dry-run ...` followed by the real command. The
-   installer validates storage/bridge/CTID, creates an unprivileged guest, installs
-   Debian packages (including Git), verified Node LTS, builds and starts systemd.
-3. **Private repo access**: the guest prints a read-only Ed25519 public deploy key and
-   pauses. Add it in GitHub → Settings → Deploy keys, then resume with the printed
-   `pct exec ... --resume` command. The private key never leaves the deploy identity.
-4. **Bootstrap**: run `pct exec <CTID> -- /usr/local/bin/seizure-diary bootstrap-admin
-   --username <admin>` (hidden prompt, no default credentials).
-5. **Private HTTPS**: terminate TLS in a LAN/WireGuard-only reverse proxy with a trusted
+2. **Runner-built releases**: every successful push to `main` creates a
+   `YYYYMMDD.VV` tag and publishes `seizure-diary-<tag>.tar.gz` plus its SHA-256
+   checksum on the GitHub Release. Builts happen in Debian 12 on GitHub Actions; the
+   guest installs only runtime prerequisites.
+3. **Read-only GitHub token**: for a private repo, create a fine-grained token scoped to
+   the repository with **Contents: read**, store it in a 0600 host file, and pass
+   `--token-file`. The guest stores it as `0400 root`; rotate/revoke it on compromise.
+4. **Install (VM default)**: review this repo on the Proxmox host, then run
+   `sudo ./deploy/proxmox/install.sh --dry-run --type vm ...` followed by the real
+   command. VM installs require an images-capable storage, a static IP/gateway and an
+   SSH private key; the official Debian 12 cloud image is SHA-512 verified.
+5. **Install (LXC)**: add `--type lxc` with rootdir/vztmpl storage. The installer creates
+   an unprivileged container and validates storage/bridge/ID.
+6. **Bootstrap**: run `pct exec <CTID> -- /usr/local/bin/seizure-diary bootstrap-admin
+   --username <admin>` for LXC, or the equivalent over SSH with `sudo` for a VM. Use the
+   hidden prompt; no default credentials exist.
+7. **Private HTTPS**: terminate TLS in a LAN/WireGuard-only reverse proxy with a trusted
    certificate; keep `HOST=127.0.0.1`; set `PUBLIC_ORIGIN`; enforce firewall/ACL by
    source, not DNS alone.
-6. **Member provisioning**: admin signs in → Accounts → Add account. Share the shown
+8. **Member provisioning**: admin signs in → Accounts → Add account. Share the shown
    username and temporary password privately (password-manager share preferred); it is
    shown once and expires after 48 h. The member sets a permanent password before diary
    access.
-7. **Password reset**: admin re-authenticates, then resets. All sessions are revoked and
+9. **Password reset**: admin re-authenticates, then resets. All sessions are revoked and
    a new one-time temporary password is shown. Give it privately; advise members to
    keep their own exports. As a last resort the operator can run
    `seizure-diary reset-password <username>` from the guest console.
-8. **Backups**: set `BACKUP_ENCRYPTION_KEY`, then enable the installed daily timer with
-   `systemctl enable --now seizure-diary-backup.timer` and run
-   `seizure-diary backup --retain 14` once manually. Check
-   `systemctl list-timers`/`journalctl -u seizure-diary-backup.service`, verify with
-   `verify-backup`, move encrypted files to separate storage, and test a restore in an
-   isolated guest. Personal JSON exports are not encrypted.
-9. **Restore**: `systemctl stop seizure-diary`; `seizure-diary restore-backup <file>
-   --force`; verify integrity; start the service. Restored sessions are revoked.
-10. **Upgrades/rollback**: `seizure-diary update --check`, then `seizure-diary update`.
-    It builds/tests in staging, takes a verified encrypted backup, migrates, swaps the
-    release atomically and health-checks. After migrations start, failures fail closed
-    (service stopped, no silent DB rollback). The previous release and snapshot are
-    retained for documented manual rollback.
+10. **Backups**: set `BACKUP_ENCRYPTION_KEY`, then enable the installed daily timer with
+    `systemctl enable --now seizure-diary-backup.timer` and run
+    `seizure-diary backup --retain 14` once manually. Check
+    `systemctl list-timers`/`journalctl -u seizure-diary-backup.service`, verify with
+    `verify-backup`, move encrypted files to separate storage, and test a restore in an
+    isolated guest. Personal JSON exports are not encrypted.
+11. **Restore**: `systemctl stop seizure-diary`; `seizure-diary restore-backup <file>
+    --force`; verify integrity; start the service. Restored sessions are revoked.
+12. **Updates/rollback**: `seizure-diary update --check`, then `seizure-diary update`
+    (optionally `--version <tag>`). It downloads/verifies the runner-built bundle, takes
+    a verified encrypted backup, migrates, swaps the release atomically and health-checks.
+    After migrations start, failures fail closed (service stopped, no silent DB rollback).
+    The previous release and snapshot are retained for documented manual rollback.
 
 ### Docker VM alternative
 
@@ -288,8 +299,13 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
 
 ## Known limitations / unverified environments
 
-- Real Proxmox `pct`/`pveam` provisioning, LAN/WireGuard ingress, external blocking,
-  and isolated-restore acceptance were **not** run (no Proxmox/network access here).
+- Real Proxmox VM/LXC provisioning, cloud-init/SSH bootstrap, runner-built release
+  download with a real token, LAN/WireGuard ingress, external blocking and isolated
+  restore were **not** run (no Proxmox/network access here). Mocked installer/updater
+  paths and the GitHub release pipeline are covered by CI.
+- The Debian VM path and the private-repository token flow need real-host acceptance.
+- The GitHub Release bundle job runs only on `main` pushes; its first real asset download
+  with a private-repository token remains an operator acceptance check.
 - Docker is built/smoke-tested in CI only; local Docker execution is unverified.
 - Real iPhone Safari and real devices are not verified; WebKit coverage is emulation.
 - A11 has automated axe coverage but still lacks the manual screen-reader/zoom pass in

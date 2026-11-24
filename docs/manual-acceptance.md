@@ -73,23 +73,30 @@ Attach rendered page images or file to the acceptance record:
 
 ## 4. Proxmox, LAN and WireGuard (A15)
 
-Use a disposable unprivileged Debian LXC/VM. Do not test against real family data.
+Use a disposable Debian VM (default) and/or unprivileged LXC. Do not test against real
+family data.
 
-- [ ] `install.sh --dry-run` shows the summary and makes no changes.
-- [ ] Fresh install completes; no Docker/nesting/privileged container is required.
-- [ ] Private-repo deploy-key pause prints only the public key; resume works without
-      recreating the container.
+- [ ] GitHub Actions produced a `YYYYMMDD.VV` tag and a release asset
+      `seizure-diary-<tag>.tar.gz` with a matching `.sha256`.
+- [ ] `install.sh --dry-run --type vm ...` and `--type lxc ...` show the summary and make
+      no changes or downloads.
+- [ ] Fresh VM install creates the Debian cloud VM, cloud-init/SSH bootstrap succeeds, and
+      the guest does not install Git/compiler build prerequisites.
+- [ ] Fresh LXC install completes without Docker, nesting or a privileged container.
+- [ ] Private-repo token is stored as `0400 root` in the guest; the app service cannot
+      read it or the release-asset download credentials.
 - [ ] `seizure-diary bootstrap-admin` refuses an already provisioned DB; sign-in succeeds
       over private HTTPS.
 - [ ] LAN client can sign in; authorized WireGuard peer can sign in.
 - [ ] A client outside LAN/VPN cannot reach the app (firewall/ACL, not just DNS).
-- [ ] Restart the guest service/container; diary data and Arms/Legs/Speech selections
-      persist.
-- [ ] `seizure-diary update --check` reports revisions without rebuilding.
-- [ ] Two-revision update builds the changed site, keeps credentials/events/areas, and
-      records before/after commits.
-- [ ] A deliberately failed update leaves the previous release intact or fails closed with
-      the service stopped and exact recovery instructions.
+- [ ] Restart the guest/service; diary data and Arms/Legs/Speech selections persist.
+- [ ] `seizure-diary update --check` reports installed/upstream versions without
+      downloading the full artifact.
+- [ ] A second runner-built release updates the site, keeps credentials/events/areas, and
+      changes the footer build tag to the new release.
+- [ ] A deliberately failed artifact download/migration/health check leaves the previous
+      release intact or fails closed with the service stopped and exact recovery
+      instructions.
 - [ ] Daily encrypted backup timer runs; `verify-backup` succeeds.
 - [ ] Restore into an isolated guest recovers all diaries without reviving old sessions or
       temporary passwords.

@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Guest bootstrap for a fresh unprivileged Debian 12 LXC, or a supported
-# existing dedicated LXC. Run as root inside the guest, or via pct exec.
-# Idempotent for the same application instance.
+# Guest bootstrap for a fresh unprivileged Debian LXC or Debian VM.
+# Installs runtime prerequisites and a prebuilt GitHub release bundle.
+# All application builds happen on GitHub Actions runners.
 set -euo pipefail
 
-REPO_URL="https://github.com/kVinB/FPKD.git"
-REF="main"
-RESUME="0"
+REPO="kVinB/FPKD"
+VERSION="latest"
+TOKEN_FILE=""
 NONINTERACTIVE="0"
 NODE_VERSION="22.13.1"
 
 APP_ROOT="/opt/seizure-diary"
 RELEASES_DIR="$APP_ROOT/releases"
 CURRENT_LINK="$APP_ROOT/current"
+TOOLS_DIR="$APP_ROOT/tools"
 CONF_DIR="/etc/seizure-diary"
 ENV_FILE="$CONF_DIR/seizure-diary.env"
 INSTALL_CONF="$CONF_DIR/install.conf"
+TOKEN_PATH="$CONF_DIR/github-token"
 DATA_DIR="/var/lib/seizure-diary"
 BACKUP_DIR="/var/backups/seizure-diary"
 SERVICE_USER="seizure-diary"
-DEPLOY_USER="seizure-diary-deploy"
 SERVICE_NAME="seizure-diary"
-GITHUB_ED25519_FINGERPRINT="${GITHUB_ED25519_FINGERPRINT:-SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU}"
 
 die() {
   printf 'install-guest.sh: %s\n' "$*" >&2
@@ -29,19 +29,23 @@ die() {
 }
 
 log() {
-  printf '[guest] %s\n' "$*"
+  printf '[guest] %s\n' "$*" >&2
 }
 
 usage() {
   cat <<'USAGE'
 Usage: sudo bash install-guest.sh [options]
 
+Installs a prebuilt, checksum-verified release bundle downloaded from GitHub.
+No Git, compiler or application build is performed on this guest.
+
 Options:
-  --repo-url <url>     GitHub HTTPS or SSH repository URL
-  --ref <branch>       Trusted branch to deploy (default: main)
-  --resume             Continue after adding the guest's read-only deploy key
-  --non-interactive    Never wait for operator input; exit cleanly if key access is missing
-  -h, --help           Show this help
+  --repo <owner/name>       GitHub repository (default: kVinB/FPKD)
+  --version latest|<tag>    Release to install (default: latest)
+  --token-file <path>       Staged read-only GitHub token (private repositories);
+                            installed as /etc/seizure-diary/github-token (0400 root)
+  --non-interactive         Accepted for host automation; no prompts are used
+  -h, --help                Show this help
 USAGE
 }
 
@@ -51,41 +55,40 @@ need_value() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --repo-url) need_value "$@"; REPO_URL="$2"; shift 2 ;;
-    --ref) need_value "$@"; REF="$2"; shift 2 ;;
-    --resume) RESUME="1"; shift ;;
+    --repo) need_value "$@"; REPO="$2"; shift 2 ;;
+    --version) need_value "$@"; VERSION="$2"; shift 2 ;;
+    --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
     --non-interactive) NONINTERACTIVE="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
 
-[ "$(id -u)" -eq 0 ] || die "run as root inside the LXC"
+[ "$(id -u)" -eq 0 ] || die "run as root inside the guest"
 [ -f /etc/debian_version ] || die "this installer supports Debian guests only"
+[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "invalid --repo (owner/name)"
+if [ "$VERSION" != "latest" ] && [[ ! "$VERSION" =~ ^[0-9]{8}\.[0-9]{2}$ ]]; then
+  die "invalid --version (latest or YYYYMMDD.VV)"
+fi
+if [ -n "$TOKEN_FILE" ] && [ ! -r "$TOKEN_FILE" ]; then
+  die "token file is not readable: $TOKEN_FILE"
+fi
+void="$NONINTERACTIVE"
 
-case "$REPO_URL" in
-  https://github.com/*/*|git@github.com:*/*) ;;
-  *) die "only GitHub HTTPS or SSH repository URLs are accepted" ;;
-esac
-[[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || die "invalid --ref"
-[[ "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid NODE_VERSION"
-
-DEPLOY_HOME="$(getent passwd "$DEPLOY_USER" 2>/dev/null | cut -d: -f6 || true)"
-DEPLOY_HOME="${DEPLOY_HOME:-/var/lib/seizure-diary-deploy}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RELEASE_TOOL_SRC="$SCRIPT_DIR/release.mjs"
+[ -r "$RELEASE_TOOL_SRC" ] || die "release.mjs must be staged next to the installer"
 
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y --no-install-recommends \
-    git ca-certificates curl openssh-client sqlite3 util-linux \
-    build-essential python3 xz-utils openssl
+    ca-certificates curl openssl sqlite3 tar util-linux xz-utils
 }
 
 install_node() {
   if command -v node >/dev/null 2>&1; then
-    local major
-    major="$(node -p 'process.versions.node.split(".")[0]')"
-    if [ "$major" -ge 20 ] && [ "$major" -le 22 ]; then
+    if node -e 'const [a,b] = process.versions.node.split(".").map(Number); process.exit(a === 22 && b >= 12 ? 0 : 1)'; then
       log "Using existing Node.js $(node --version)"
       return
     fi
@@ -99,7 +102,7 @@ install_node() {
   esac
   local dir="/usr/local/lib/nodejs/node-v${NODE_VERSION}-linux-${arch}"
   if [ ! -x "$dir/bin/node" ]; then
-    log "Installing Node.js v$NODE_VERSION ($arch) from official tarball with checksum verification"
+    log "Installing Node.js v$NODE_VERSION ($arch) from the official tarball with checksum verification"
     local tmp
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' RETURN
@@ -115,29 +118,22 @@ install_node() {
   log "Node.js $(node --version), npm $(npm --version)"
 }
 
-create_identities_and_dirs() {
+create_identity_and_dirs() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     useradd --system --home-dir "$DATA_DIR" --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
-  if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
-    useradd --system --home-dir "$DEPLOY_HOME" --create-home --shell /bin/bash "$DEPLOY_USER"
-  fi
-
   install -d -m 0750 -o root -g "$SERVICE_USER" "$CONF_DIR"
   install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR" "$BACKUP_DIR"
-  install -d -m 0755 -o root -g root "$APP_ROOT" "$RELEASES_DIR"
-  install -d -m 0750 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$DEPLOY_HOME"
-  install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$DEPLOY_HOME/.ssh"
+  install -d -m 0755 -o root -g root "$APP_ROOT" "$RELEASES_DIR" "$TOOLS_DIR"
 }
 
 write_config_files() {
   cat > "$INSTALL_CONF" <<EOF
-REPO_URL=$REPO_URL
-REF=$REF
-DEPLOY_USER=$DEPLOY_USER
-SERVICE_USER=$SERVICE_USER
+REPO_SLUG=$REPO
+GITHUB_TOKEN_FILE=$TOKEN_PATH
 APP_ROOT=$APP_ROOT
-WORK_DIR=$DEPLOY_HOME
+SERVICE_USER=$SERVICE_USER
+TOOLS_DIR=$TOOLS_DIR
 NODE_VERSION=$NODE_VERSION
 EOF
   chown root:"$SERVICE_USER" "$INSTALL_CONF"
@@ -170,155 +166,92 @@ EOF_ENV
   fi
 }
 
-ssh_options() {
-  printf 'ssh -i %s/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=%s/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15' \
-    "$DEPLOY_HOME" "$DEPLOY_HOME"
-}
-
-setup_deploy_key() {
-  case "$REPO_URL" in
-    git@github.com:*/*) ;;
-    *) return 0 ;;
-  esac
-
-  if [ ! -f "$DEPLOY_HOME/.ssh/id_ed25519" ]; then
-    log "Generating a read-only deploy key for this guest"
-    runuser -u "$DEPLOY_USER" -- ssh-keygen -q -t ed25519 -N '' \
-      -C "seizure-diary-deploy@$(hostname)" \
-      -f "$DEPLOY_HOME/.ssh/id_ed25519"
-  fi
-  chown "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_HOME/.ssh/id_ed25519" "$DEPLOY_HOME/.ssh/id_ed25519.pub"
-  chmod 0600 "$DEPLOY_HOME/.ssh/id_ed25519"
-
-  if [ ! -f "$DEPLOY_HOME/.ssh/known_hosts" ]; then
-    log "Verifying GitHub's SSH host key fingerprint"
-    local tmp
-    tmp="$(mktemp)"
-    ssh-keyscan -T 15 -t ed25519 github.com > "$tmp" 2>/dev/null || die "could not scan github.com SSH host key"
-    grep -q '^github.com ' "$tmp" || die "github.com did not return an Ed25519 host key"
-    local fingerprint
-    fingerprint="$(ssh-keygen -lf "$tmp" | awk '{print $2}' | head -1)"
-    if [ "$fingerprint" != "$GITHUB_ED25519_FINGERPRINT" ]; then
-      rm -f "$tmp"
-      die "GitHub host key fingerprint mismatch (got $fingerprint). Refusing to continue."
-    fi
-    install -m 0600 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$tmp" "$DEPLOY_HOME/.ssh/known_hosts"
-    rm -f "$tmp"
-  fi
-}
-
-test_repo_access() {
-  local ssh_cmd
-  ssh_cmd="$(ssh_options)"
-  if [[ "$REPO_URL" == git@github.com:* ]]; then
-    runuser -u "$DEPLOY_USER" -- env GIT_SSH_COMMAND="$ssh_cmd" \
-      git ls-remote "$REPO_URL" >/dev/null 2>&1
-  else
-    runuser -u "$DEPLOY_USER" -- env GIT_TERMINAL_PROMPT=0 \
-      git ls-remote "$REPO_URL" >/dev/null 2>&1
-  fi
-}
-
-require_access_or_pause() {
-  if test_repo_access; then
-    return 0
-  fi
-  echo
-  echo "The guest cannot read $REPO_URL yet."
-  if [[ "$REPO_URL" == git@github.com:* ]]; then
-    echo "Add this read-only deploy key in GitHub (Repository -> Settings -> Deploy keys):"
-    echo
-    cat "$DEPLOY_HOME/.ssh/id_ed25519.pub"
-    echo
-    echo "Then resume:"
-    echo "  bash /root/install-guest.sh --repo-url '$REPO_URL' --ref '$REF' --non-interactive --resume"
-    exit 2
-  fi
-  echo "For a private repository, use a repo-scoped SSH URL so the deploy key can be used."
-  exit 2
-}
-
-fetch_repository() {
-  local ssh_cmd
-  ssh_cmd="$(ssh_options)"
-  local work="$DEPLOY_HOME/repo"
-  if [ ! -d "$work/.git" ]; then
-    log "Cloning $REPO_URL"
-    if [[ "$REPO_URL" == git@github.com:* ]]; then
-      runuser -u "$DEPLOY_USER" -- env GIT_SSH_COMMAND="$ssh_cmd" \
-        git clone "$REPO_URL" "$work"
+install_token() {
+  if [ -n "$TOKEN_FILE" ]; then
+    if [ "$(readlink -f "$TOKEN_FILE")" = "$(readlink -f "$TOKEN_PATH" 2>/dev/null || printf '%s' "$TOKEN_PATH")" ]; then
+      log "Using the read-only GitHub token already in place"
     else
-      runuser -u "$DEPLOY_USER" -- env GIT_TERMINAL_PROMPT=0 \
-        git clone "$REPO_URL" "$work"
+      log "Installing the read-only GitHub token (0400 root)"
+      install -m 0400 -o root -g root "$TOKEN_FILE" "$TOKEN_PATH"
+      rm -f "$TOKEN_FILE"
     fi
+  elif [ -r "$TOKEN_PATH" ]; then
+    log "Using the existing read-only GitHub token"
   else
-    log "Fetching $REF"
-    if [[ "$REPO_URL" == git@github.com:* ]]; then
-      runuser -u "$DEPLOY_USER" -- env GIT_SSH_COMMAND="$ssh_cmd" \
-        git -C "$work" fetch origin "$REF"
-    else
-      runuser -u "$DEPLOY_USER" -- env GIT_TERMINAL_PROMPT=0 \
-        git -C "$work" fetch origin "$REF"
-    fi
+    log "No GitHub token configured; release downloads must be publicly readable"
   fi
-  runuser -u "$DEPLOY_USER" -- git -C "$work" rev-parse FETCH_HEAD
 }
 
-build_release() {
-  local commit="$1"
-  local release="$RELEASES_DIR/$commit"
-  if [ -f "$release/.deployed-commit" ]; then
-    log "Release $commit already built; reusing it"
-    echo "$release"
-    return 0
+release_args() {
+  local -n _args="$1"
+  _args=(--repo "$REPO" --version "$VERSION")
+  if [ -r "$TOKEN_PATH" ]; then
+    _args+=(--token-file "$TOKEN_PATH")
+  fi
+}
+
+download_release() {
+  install -m 0755 -o root -g root "$RELEASE_TOOL_SRC" "$TOOLS_DIR/release.mjs"
+  local args=()
+  release_args args
+  local resolved
+  if ! resolved="$(node "$TOOLS_DIR/release.mjs" resolve "${args[@]}")"; then
+    die "could not resolve release $VERSION for $REPO. For a private repository, supply --token-file with a read-only GitHub token."
+  fi
+  local version
+  version="$(printf '%s' "$resolved" | node -e '
+    let s = "";
+    process.stdin.on("data", (d) => (s += d));
+    process.stdin.on("end", () => {
+      const value = JSON.parse(s).version;
+      if (!/^[0-9]{8}\.[0-9]{2}$/.test(value)) process.exit(1);
+      process.stdout.write(value);
+    });
+  ')" || die "release metadata did not contain a valid YYYYMMDD.VV version"
+
+  local release="$RELEASES_DIR/$version"
+  if [ -d "$release" ] && [ ! -f "$release/.deployed-version" ]; then
+    die "release directory $release exists without a completion marker; remove it and retry"
+  fi
+  if [ -f "$release/.deployed-version" ]; then
+    log "Release $version is already present; reusing it"
+  else
+    log "Downloading and verifying release $version"
+    local downloaded
+    if ! downloaded="$(node "$TOOLS_DIR/release.mjs" download "${args[@]}" --dest "$RELEASES_DIR")"; then
+      die "release download, checksum verification or extraction failed"
+    fi
+    [ -d "$release" ] || die "downloaded release directory is missing: $release"
+    printf '%s\n' "$version" > "$release/.deployed-version"
   fi
 
-  local work="$DEPLOY_HOME/repo"
-  local build="$DEPLOY_HOME/build-$commit"
-  log "Staging and building $commit as $DEPLOY_USER"
-  rm -rf "$build"
-  mkdir -p "$build"
-  runuser -u "$DEPLOY_USER" -- git -C "$work" archive "$commit" | tar -x -C "$build"
-  chown -R "$DEPLOY_USER:$DEPLOY_USER" "$build"
+  [ -f "$release/dist/server/index.js" ] || die "release is missing dist/server/index.js"
+  [ -f "$release/dist/web/index.html" ] || die "release is missing dist/web/index.html"
+  [ -d "$release/node_modules" ] || die "release is missing production node_modules"
+  [ -f "$release/deploy/proxmox/update.sh" ] || die "release is missing update.sh"
+  [ -f "$release/deploy/proxmox/release.mjs" ] || die "release is missing release.mjs"
 
-  runuser -u "$DEPLOY_USER" -- env HOME="$DEPLOY_HOME" bash -c \
-    "cd '$build' && npm ci && npm run typecheck && npm test && npm run build && npm prune --omit=dev" \
-    || die "build or tests failed for $commit; the live release and database were not touched"
-
-  install -d -m 0750 -o root -g "$SERVICE_USER" "$release"
-  cp -a "$build/dist" "$release/dist"
-  cp "$build/package.json" "$build/package-lock.json" "$release/"
-  cp -a "$build/node_modules" "$release/node_modules"
-  printf '%s\n' "$commit" > "$release/.deployed-commit"
   chown -R root:"$SERVICE_USER" "$release"
   chmod -R g+rX,o-rwx "$release"
-  echo "$release"
+  printf '%s' "$version"
 }
 
 install_runtime_files() {
-  local commit="$1"
-  local work="$DEPLOY_HOME/repo"
-
-  log "Installing management command, updater and systemd units"
-  runuser -u "$DEPLOY_USER" -- git -C "$work" show "$commit:deploy/proxmox/seizure-diary" > /usr/local/bin/seizure-diary
-  chown root:root /usr/local/bin/seizure-diary
-  chmod 0755 /usr/local/bin/seizure-diary
-
-  runuser -u "$DEPLOY_USER" -- git -C "$work" show "$commit:deploy/proxmox/update.sh" > "$APP_ROOT/update.sh"
-  chown root:root "$APP_ROOT/update.sh"
-  chmod 0755 "$APP_ROOT/update.sh"
-
+  local version="$1"
+  local release="$RELEASES_DIR/$version"
+  log "Installing management command, updater and systemd units for $version"
+  install -m 0755 -o root -g root "$release/deploy/proxmox/seizure-diary" /usr/local/bin/seizure-diary
+  install -m 0755 -o root -g root "$release/deploy/proxmox/update.sh" "$APP_ROOT/update.sh"
+  install -m 0755 -o root -g root "$release/deploy/proxmox/release.mjs" "$TOOLS_DIR/release.mjs"
   local unit
   for unit in seizure-diary.service seizure-diary-backup.service seizure-diary-backup.timer; do
-    runuser -u "$DEPLOY_USER" -- git -C "$work" show "$commit:deploy/proxmox/systemd/$unit" \
-      > "/etc/systemd/system/$unit"
-    chown root:root "/etc/systemd/system/$unit"
-    chmod 0644 "/etc/systemd/system/$unit"
+    install -m 0644 -o root -g root "$release/deploy/proxmox/systemd/$unit" "/etc/systemd/system/$unit"
   done
 }
 
 start_and_check() {
-  local release="$1"
+  local version="$1"
+  local release="$RELEASES_DIR/$version"
   ln -sfn "$release" "$APP_ROOT/current.new"
   mv -Tf "$APP_ROOT/current.new" "$CURRENT_LINK"
   systemctl daemon-reload
@@ -328,11 +261,11 @@ start_and_check() {
   local port="3000"
   # shellcheck disable=SC1090
   if [ -r "$ENV_FILE" ]; then
-    port="$(. "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${PORT:-3000}")"
+    port="$(set -a; . "$ENV_FILE" >/dev/null 2>&1; set +a; printf '%s' "${PORT:-3000}")"
   fi
   for _ in $(seq 1 20); do
     if curl -fsS "http://127.0.0.1:${port}/api/v1/health" >/dev/null 2>&1; then
-      log "Service is ready on 127.0.0.1:${port}"
+      log "Service is ready on 127.0.0.1:${port} (build $version)"
       if grep -Eq '^BACKUP_ENCRYPTION_KEY=.+' "$ENV_FILE"; then
         systemctl enable --now seizure-diary-backup.timer >/dev/null 2>&1 ||
           log "warning: could not enable the backup timer; inspect systemctl status seizure-diary-backup.timer"
@@ -349,44 +282,32 @@ start_and_check() {
   die "the service did not become healthy. The release is in place but not serving. Inspect the logs above."
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-log "Installing packages"
+log "Installing runtime packages"
 install_packages
 log "Checking Node.js"
 install_node
-log "Creating service and deployment identities"
-create_identities_and_dirs
+log "Creating service identity and directories"
+create_identity_and_dirs
 write_config_files
-setup_deploy_key
+install_token
 
-if [ "$RESUME" = "1" ]; then
-  log "Resuming after deploy-key setup"
-fi
-require_access_or_pause
-
-log "Fetching repository"
-TARGET_COMMIT="$(fetch_repository)"
-[ -n "$TARGET_COMMIT" ] || die "could not resolve a commit for $REF"
-log "Target commit: $TARGET_COMMIT"
-
-RELEASE_DIR="$(build_release "$TARGET_COMMIT")"
-install_runtime_files "$TARGET_COMMIT"
-start_and_check "$RELEASE_DIR"
+log "Resolving and downloading the runner-built release from $REPO"
+RELEASE_VERSION="$(download_release)"
+install_runtime_files "$RELEASE_VERSION"
+start_and_check "$RELEASE_VERSION"
 
 cat <<DONE
 
-Seizure Diary is installed at $RELEASE_DIR
+Seizure Diary $RELEASE_VERSION is installed at $RELEASES_DIR/$RELEASE_VERSION
 
 Next steps:
-  1. Create the first admin (guest-local, hidden password prompt):
+  1. Create the first admin:
        /usr/local/bin/seizure-diary bootstrap-admin --username <admin>
   2. Configure a private HTTPS reverse proxy and set PUBLIC_ORIGIN in
        $ENV_FILE
      then: systemctl restart $SERVICE_NAME
   3. Set BACKUP_ENCRYPTION_KEY (base64, 32 bytes) in $ENV_FILE, then enable daily backups:
        systemctl enable --now seizure-diary-backup.timer
-     Check: systemctl list-timers seizure-diary-backup.timer
-            journalctl -u seizure-diary-backup.service -n 50
-  4. Verify LAN/WireGuard access is allowed and external access is blocked.
-  5. Manage updates with: /usr/local/bin/seizure-diary update
+  4. Future updates download the next runner-built GitHub release:
+       /usr/local/bin/seizure-diary update
 DONE

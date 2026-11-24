@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Manual, forward-only updater installed at /opt/seizure-diary/update.sh.
+# Downloads a runner-built, checksum-verified GitHub release bundle.
 # Run as root. Never invoked automatically or in the background.
 set -euo pipefail
 
@@ -12,22 +13,30 @@ SERVICE_NAME="${SEIZURE_DIARY_SERVICE_NAME:-seizure-diary}"
 LOCK_FILE="${SEIZURE_DIARY_UPDATE_LOCK:-/run/seizure-diary-update.lock}"
 BIN_DIR="${SEIZURE_DIARY_BIN_DIR:-/usr/local/bin}"
 SYSTEMD_DIR="${SEIZURE_DIARY_SYSTEMD_DIR:-/etc/systemd/system}"
+TOOLS_DIR="${SEIZURE_DIARY_TOOLS_DIR:-$APP_ROOT/tools}"
 HEALTH_ATTEMPTS="${SEIZURE_DIARY_HEALTH_ATTEMPTS:-20}"
 
+TARGET_REQUEST="latest"
 CHECK_ONLY="0"
-for arg in "$@"; do
-  case "$arg" in
-    --check) CHECK_ONLY="1" ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --check) CHECK_ONLY="1"; shift ;;
+    --version)
+      [ "$#" -ge 2 ] || { printf 'update.sh: missing value for --version\n' >&2; exit 1; }
+      TARGET_REQUEST="$2"
+      shift 2
+      ;;
     -h|--help)
       cat <<'USAGE'
-Usage: seizure-diary update [--check]
+Usage: seizure-diary update [--check] [--version latest|<YYYYMMDD.VV>]
 
---check reports installed and upstream revisions only. It does not build,
-stop the service, back up, migrate or deploy.
+Downloads the next runner-built GitHub release and deploys it transactionally.
+--check reports installed and upstream versions only. It does not stop the
+service, back up, migrate or deploy.
 USAGE
       exit 0
       ;;
-    *) printf 'update.sh: unknown option %s\n' "$arg" >&2; exit 1 ;;
+    *) printf 'update.sh: unknown option %s\n' "$1" >&2; exit 1 ;;
   esac
 done
 
@@ -37,13 +46,14 @@ die() {
 }
 
 log() {
-  printf '[update] %s\n' "$*"
+  printf '[update] %s\n' "$*" >&2
 }
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ -r "$INSTALL_CONF" ] || die "missing $INSTALL_CONF"
 [ -r "$ENV_FILE" ] || die "missing $ENV_FILE"
 [ -d "$CURRENT_LINK" ] || die "no active release at $CURRENT_LINK"
+[ -x "$TOOLS_DIR/release.mjs" ] || die "missing release tool at $TOOLS_DIR/release.mjs"
 
 # shellcheck disable=SC1090
 . "$INSTALL_CONF"
@@ -52,58 +62,54 @@ set -a
 . "$ENV_FILE"
 set +a
 
-REPO_URL="${REPO_URL:-}"
-REF="${REF:-main}"
-DEPLOY_USER="${DEPLOY_USER:-seizure-diary-deploy}"
-SERVICE_USER="${SERVICE_USER:-seizure-diary}"
-WORK_DIR="${WORK_DIR:-/var/lib/seizure-diary-deploy}"
+REPO_SLUG="${REPO_SLUG:-}"
+GITHUB_TOKEN_FILE="${GITHUB_TOKEN_FILE:-/etc/seizure-diary/github-token}"
 DB_PATH="${SEIZURE_DIARY_DB_PATH:?SEIZURE_DIARY_DB_PATH is not set}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/seizure-diary}"
 PORT="${PORT:-3000}"
+SERVICE_USER="${SERVICE_USER:-seizure-diary}"
 
-[ -n "$REPO_URL" ] || die "REPO_URL missing from $INSTALL_CONF"
-[[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || die "invalid REF in $INSTALL_CONF"
+[ -n "$REPO_SLUG" ] || die "REPO_SLUG missing from $INSTALL_CONF"
+if [ "$TARGET_REQUEST" != "latest" ] && [[ ! "$TARGET_REQUEST" =~ ^[0-9]{8}\.[0-9]{2}$ ]]; then
+  die "invalid --version (latest or YYYYMMDD.VV)"
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   die "another update is already running"
 fi
 
-WORK_REPO="$WORK_DIR/repo"
-[ -d "$WORK_REPO/.git" ] || die "missing deployment checkout at $WORK_REPO"
+CURRENT_VERSION="$(cat "$CURRENT_LINK/.deployed-version" 2>/dev/null || true)"
+if [ -z "$CURRENT_VERSION" ]; then
+  CURRENT_VERSION="$(cat "$CURRENT_LINK/.deployed-commit" 2>/dev/null || true)"
+fi
+[ -n "$CURRENT_VERSION" ] || die "cannot read installed version from $CURRENT_LINK"
+CURRENT_BUNDLE_VERSION="$CURRENT_VERSION"
+[[ "$CURRENT_VERSION" =~ ^[0-9]{8}\.[0-9]{2}$ ]] || CURRENT_BUNDLE_VERSION="unknown"
 
-DEPLOY_HOME="$(getent passwd "$DEPLOY_USER" | cut -d: -f6)"
-SSH_CMD="ssh -i $DEPLOY_HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$DEPLOY_HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
-
-remote_url="$(runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" remote get-url origin)"
-if [ "$remote_url" != "$REPO_URL" ]; then
-  die "configured remote '$remote_url' does not match $INSTALL_CONF ($REPO_URL); refusing to update"
+release_args=()
+if [ -r "$GITHUB_TOKEN_FILE" ]; then
+  release_args+=(--token-file "$GITHUB_TOKEN_FILE")
 fi
 
-CURRENT_COMMIT="$(cat "$CURRENT_LINK/.deployed-commit" 2>/dev/null || true)"
-[ -n "$CURRENT_COMMIT" ] || die "cannot read deployed commit from $CURRENT_LINK/.deployed-commit"
-
-log "Fetching $REF from $REPO_URL"
-if [[ "$REPO_URL" == git@github.com:* ]]; then
-  runuser -u "$DEPLOY_USER" -- env GIT_SSH_COMMAND="$SSH_CMD" \
-    git -C "$WORK_REPO" fetch origin "$REF" || die "git fetch failed; no changes were made"
-else
-  runuser -u "$DEPLOY_USER" -- env GIT_TERMINAL_PROMPT=0 \
-    git -C "$WORK_REPO" fetch origin "$REF" || die "git fetch failed; no changes were made"
+log "Resolving $TARGET_REQUEST from $REPO_SLUG"
+if ! resolved="$(node "$TOOLS_DIR/release.mjs" resolve \
+  --repo "$REPO_SLUG" --version "$TARGET_REQUEST" "${release_args[@]}")"; then
+  die "could not resolve the requested release. For a private repository, check $GITHUB_TOKEN_FILE."
 fi
-TARGET_COMMIT="$(runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" rev-parse FETCH_HEAD)"
-
-if ! runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" cat-file -e "$CURRENT_COMMIT^{commit}" 2>/dev/null; then
-  die "installed commit $CURRENT_COMMIT is not in the deployment checkout; refusing an unsafe update. Reinstall or restore the matching release first."
-fi
-
-if ! runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" merge-base --is-ancestor "$CURRENT_COMMIT" "$TARGET_COMMIT"; then
-  die "upstream $TARGET_COMMIT is not a forward descendant of installed $CURRENT_COMMIT (diverged or rewritten history). Operator intervention required."
-fi
+TARGET_VERSION="$(printf '%s' "$resolved" | node -e '
+  let s = "";
+  process.stdin.on("data", (d) => (s += d));
+  process.stdin.on("end", () => {
+    const value = JSON.parse(s).version;
+    if (!/^[0-9]{8}\.[0-9]{2}$/.test(value)) process.exit(1);
+    process.stdout.write(value);
+  });
+')" || die "release metadata did not contain a valid YYYYMMDD.VV version"
 
 if [ "$CHECK_ONLY" = "1" ]; then
-  printf 'installed: %s\nupstream:  %s (%s)\n' "$CURRENT_COMMIT" "$TARGET_COMMIT" "$REF"
-  if [ "$CURRENT_COMMIT" = "$TARGET_COMMIT" ]; then
+  printf 'installed: %s\nupstream:  %s\n' "$CURRENT_VERSION" "$TARGET_VERSION"
+  if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ]; then
     printf 'status: up to date\n'
   else
     printf 'status: update available (run: seizure-diary update)\n'
@@ -111,9 +117,13 @@ if [ "$CHECK_ONLY" = "1" ]; then
   exit 0
 fi
 
-if [ "$CURRENT_COMMIT" = "$TARGET_COMMIT" ]; then
-  log "Already at $TARGET_COMMIT; nothing to build, back up or restart"
+if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ]; then
+  log "Already at $TARGET_VERSION; nothing to download, back up or restart"
   exit 0
+fi
+
+if [[ "$CURRENT_VERSION" =~ ^[0-9]{8}\.[0-9]{2}$ ]] && [[ "$TARGET_VERSION" < "$CURRENT_VERSION" ]]; then
+  die "refusing to downgrade from $CURRENT_VERSION to $TARGET_VERSION"
 fi
 
 [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] ||
@@ -124,48 +134,40 @@ if [ "${free_kb:-0}" -lt 1048576 ]; then
   die "less than 1 GiB free on $APP_ROOT; free space before updating"
 fi
 
-BUILD_DIR="$WORK_DIR/update-$TARGET_COMMIT"
-RELEASE_DIR="$RELEASES_DIR/$TARGET_COMMIT"
-
-cleanup_build() {
-  rm -rf "$BUILD_DIR"
-}
-trap cleanup_build EXIT
-
-log "Staging $TARGET_COMMIT"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" archive "$TARGET_COMMIT" | tar -x -C "$BUILD_DIR"
-chown -R "$DEPLOY_USER:$DEPLOY_USER" "$BUILD_DIR"
-
-log "Installing dependencies, testing and building (live service untouched)"
-if ! runuser -u "$DEPLOY_USER" -- env HOME="$DEPLOY_HOME" bash -c \
-  "cd '$BUILD_DIR' && npm ci && npm run typecheck && npm test && npm run build && npm prune --omit=dev"; then
-  die "staging build or tests failed for $TARGET_COMMIT; the live release and database were not touched"
+RELEASE_DIR="$RELEASES_DIR/$TARGET_VERSION"
+if [ -d "$RELEASE_DIR" ] && [ ! -f "$RELEASE_DIR/.deployed-version" ]; then
+  die "release directory $RELEASE_DIR exists without a completion marker; remove it and retry"
 fi
 
-log "Preparing release directory"
-rm -rf "$RELEASE_DIR"
-install -d -m 0750 -o root -g "$SERVICE_USER" "$RELEASE_DIR"
-cp -a "$BUILD_DIR/dist" "$RELEASE_DIR/dist"
-cp "$BUILD_DIR/package.json" "$BUILD_DIR/package-lock.json" "$RELEASE_DIR/"
-cp -a "$BUILD_DIR/node_modules" "$RELEASE_DIR/node_modules"
-printf '%s\n' "$TARGET_COMMIT" > "$RELEASE_DIR/.deployed-commit"
+if [ -f "$RELEASE_DIR/.deployed-version" ]; then
+  log "Release $TARGET_VERSION is already downloaded; reusing it"
+else
+  log "Downloading and verifying release $TARGET_VERSION"
+  if ! node "$TOOLS_DIR/release.mjs" download \
+    --repo "$REPO_SLUG" --version "$TARGET_VERSION" "${release_args[@]}" --dest "$RELEASES_DIR"; then
+    die "release download, checksum verification or extraction failed; the live release was not touched"
+  fi
+  [ -d "$RELEASE_DIR" ] || die "downloaded release directory is missing: $RELEASE_DIR"
+  printf '%s\n' "$TARGET_VERSION" > "$RELEASE_DIR/.deployed-version"
+fi
+
+for required in \
+  dist/server/index.js dist/web/index.html node_modules \
+  deploy/proxmox/update.sh deploy/proxmox/seizure-diary deploy/proxmox/release.mjs; do
+  [ -e "$RELEASE_DIR/$required" ] || die "release is missing $required"
+done
 chown -R root:"$SERVICE_USER" "$RELEASE_DIR"
 chmod -R g+rX,o-rwx "$RELEASE_DIR"
 
-# Install the new management command and unit before cutover; paths are stable.
-runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" show "$TARGET_COMMIT:deploy/proxmox/seizure-diary" \
-  > "$BIN_DIR/seizure-diary.new"
-chown root:root "$BIN_DIR/seizure-diary.new"
-chmod 0755 "$BIN_DIR/seizure-diary.new"
+log "Installing management command, updater and systemd units before cutover"
+install -m 0755 -o root -g root "$RELEASE_DIR/deploy/proxmox/seizure-diary" "$BIN_DIR/seizure-diary.new"
 mv -f "$BIN_DIR/seizure-diary.new" "$BIN_DIR/seizure-diary"
-
+install -m 0755 -o root -g root "$RELEASE_DIR/deploy/proxmox/update.sh" "$APP_ROOT/update.sh.new"
+mv -f "$APP_ROOT/update.sh.new" "$APP_ROOT/update.sh"
+install -m 0755 -o root -g root "$RELEASE_DIR/deploy/proxmox/release.mjs" "$TOOLS_DIR/release.mjs.new"
+mv -f "$TOOLS_DIR/release.mjs.new" "$TOOLS_DIR/release.mjs"
 for unit in seizure-diary.service seizure-diary-backup.service seizure-diary-backup.timer; do
-  runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" show \
-    "$TARGET_COMMIT:deploy/proxmox/systemd/$unit" > "$SYSTEMD_DIR/$unit.new"
-  chown root:root "$SYSTEMD_DIR/$unit.new"
-  chmod 0644 "$SYSTEMD_DIR/$unit.new"
+  install -m 0644 -o root -g root "$RELEASE_DIR/deploy/proxmox/systemd/$unit" "$SYSTEMD_DIR/$unit.new"
   mv -f "$SYSTEMD_DIR/$unit.new" "$SYSTEMD_DIR/$unit"
 done
 systemctl daemon-reload
@@ -183,7 +185,7 @@ if ! runuser -u "$SERVICE_USER" -- env \
   die "aborted before migrations"
 fi
 
-log "Applying versioned migrations for $TARGET_COMMIT"
+log "Applying versioned migrations for $TARGET_VERSION"
 if ! runuser -u "$SERVICE_USER" -- env \
   SEIZURE_DIARY_DB_PATH="$DB_PATH" \
   NODE_ENV=production \
@@ -228,7 +230,7 @@ if [ "$ready" != "1" ]; then
 NEW RELEASE DID NOT BECOME HEALTHY.
 The service is left STOPPED and the database is NOT automatically rolled back,
 because migrations may have run and user writes could exist. Previous release:
-  $RELEASES_DIR/$CURRENT_COMMIT
+  $RELEASES_DIR/$CURRENT_VERSION
 Previous snapshot: $BACKUP_DIR (newest encrypted file)
 
 Inspect:
@@ -243,7 +245,5 @@ if grep -Eq '^BACKUP_ENCRYPTION_KEY=.+' "$ENV_FILE"; then
     log "warning: could not enable the daily backup timer"
 fi
 
-trap - EXIT
-cleanup_build
-printf 'updated: %s -> %s\n' "$CURRENT_COMMIT" "$TARGET_COMMIT"
-printf 'previous release retained at %s\n' "$RELEASES_DIR/$CURRENT_COMMIT"
+printf 'updated: %s -> %s\n' "$CURRENT_VERSION" "$TARGET_VERSION"
+printf 'previous release retained at %s\n' "$RELEASES_DIR/$CURRENT_VERSION"

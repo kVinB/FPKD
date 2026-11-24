@@ -41,8 +41,14 @@ HTTPS is in scope.
 - Publish the app only through a private HTTPS reverse proxy reachable from LAN or
   individual WireGuard peers. Enforce firewall/ACL rules; DNS alone is not protection.
 - Do not add public port forwarding, public tunnels, shared accounts or public signup.
-- Keep `PUBLIC_ORIGIN`, `CSRF_SECRET`, `BACKUP_ENCRYPTION_KEY`, deploy keys and database
-  files out of source control and out of the web root.
+- Keep `PUBLIC_ORIGIN`, `CSRF_SECRET`, `BACKUP_ENCRYPTION_KEY`, GitHub tokens and
+  database files out of source control and out of the web root.
+- Proxmox guests download runner-built release bundles from GitHub. Use a repo-scoped
+  read-only token (fine-grained **Contents: read**) stored `0400 root` at
+  `/etc/seizure-diary/github-token`; the app service must not read it. Rotate/revoke it
+  after guest compromise. Do not put tokens in URLs, command arguments or logs.
+- Every release bundle is SHA-256 verified before extraction. Do not disable checksum
+  verification or accept assets from untrusted repositories.
 - Run as the provided unprivileged identities. Do not use privileged LXC or Docker
   nesting.
 - Verify an encrypted backup restore in an isolated guest before relying on backups.
