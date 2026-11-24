@@ -3,13 +3,16 @@
 # Run as root. Never invoked automatically or in the background.
 set -euo pipefail
 
-APP_ROOT="/opt/seizure-diary"
+APP_ROOT="${SEIZURE_DIARY_APP_ROOT:-/opt/seizure-diary}"
 CURRENT_LINK="$APP_ROOT/current"
 RELEASES_DIR="$APP_ROOT/releases"
-ENV_FILE="/etc/seizure-diary/seizure-diary.env"
-INSTALL_CONF="/etc/seizure-diary/install.conf"
-SERVICE_NAME="seizure-diary"
-LOCK_FILE="/run/seizure-diary-update.lock"
+ENV_FILE="${SEIZURE_DIARY_ENV_FILE:-/etc/seizure-diary/seizure-diary.env}"
+INSTALL_CONF="${SEIZURE_DIARY_INSTALL_CONF:-/etc/seizure-diary/install.conf}"
+SERVICE_NAME="${SEIZURE_DIARY_SERVICE_NAME:-seizure-diary}"
+LOCK_FILE="${SEIZURE_DIARY_UPDATE_LOCK:-/run/seizure-diary-update.lock}"
+BIN_DIR="${SEIZURE_DIARY_BIN_DIR:-/usr/local/bin}"
+SYSTEMD_DIR="${SEIZURE_DIARY_SYSTEMD_DIR:-/etc/systemd/system}"
+HEALTH_ATTEMPTS="${SEIZURE_DIARY_HEALTH_ATTEMPTS:-20}"
 
 CHECK_ONLY="0"
 for arg in "$@"; do
@@ -153,17 +156,17 @@ chmod -R g+rX,o-rwx "$RELEASE_DIR"
 
 # Install the new management command and unit before cutover; paths are stable.
 runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" show "$TARGET_COMMIT:deploy/proxmox/seizure-diary" \
-  > /usr/local/bin/seizure-diary.new
-chown root:root /usr/local/bin/seizure-diary.new
-chmod 0755 /usr/local/bin/seizure-diary.new
-mv -f /usr/local/bin/seizure-diary.new /usr/local/bin/seizure-diary
+  > "$BIN_DIR/seizure-diary.new"
+chown root:root "$BIN_DIR/seizure-diary.new"
+chmod 0755 "$BIN_DIR/seizure-diary.new"
+mv -f "$BIN_DIR/seizure-diary.new" "$BIN_DIR/seizure-diary"
 
 for unit in seizure-diary.service seizure-diary-backup.service seizure-diary-backup.timer; do
   runuser -u "$DEPLOY_USER" -- git -C "$WORK_REPO" show \
-    "$TARGET_COMMIT:deploy/proxmox/systemd/$unit" > "/etc/systemd/system/$unit.new"
-  chown root:root "/etc/systemd/system/$unit.new"
-  chmod 0644 "/etc/systemd/system/$unit.new"
-  mv -f "/etc/systemd/system/$unit.new" "/etc/systemd/system/$unit"
+    "$TARGET_COMMIT:deploy/proxmox/systemd/$unit" > "$SYSTEMD_DIR/$unit.new"
+  chown root:root "$SYSTEMD_DIR/$unit.new"
+  chmod 0644 "$SYSTEMD_DIR/$unit.new"
+  mv -f "$SYSTEMD_DIR/$unit.new" "$SYSTEMD_DIR/$unit"
 done
 systemctl daemon-reload
 
@@ -210,7 +213,7 @@ mv -Tf "$APP_ROOT/current.new" "$CURRENT_LINK"
 
 systemctl start "$SERVICE_NAME"
 ready="0"
-for _ in $(seq 1 20); do
+for _ in $(seq 1 "$HEALTH_ATTEMPTS"); do
   if curl -fsS "http://127.0.0.1:${PORT}/api/v1/health" >/dev/null 2>&1; then
     ready="1"
     break
@@ -219,6 +222,7 @@ for _ in $(seq 1 20); do
 done
 
 if [ "$ready" != "1" ]; then
+  systemctl stop "$SERVICE_NAME" || true
   cat >&2 <<FAILED
 
 NEW RELEASE DID NOT BECOME HEALTHY.
