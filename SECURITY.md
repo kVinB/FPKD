@@ -33,6 +33,8 @@ HTTPS is in scope.
   Personal JSON exports are unencrypted by design; downloaded PDFs leave app storage.
 - Session tokens are stored only as hashes; passwords use Argon2id; temporary passwords
   are one-time and expire.
+- CI runs `npm audit --audit-level=high`; the production dependency audit is kept at zero
+  known vulnerabilities. Re-run the audit before upgrading dependencies.
 
 ## Deployment requirements
 

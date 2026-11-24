@@ -52,7 +52,12 @@ export function registerErrorHandlers(app: FastifyInstance): void {
   app.setErrorHandler((error, request, reply) => {
     if (!(error instanceof AppError)) {
       request.log.error(
-        { err: { message: error.message, code: (error as { code?: string }).code } },
+        {
+          err: {
+            message: error instanceof Error ? error.message : String(error),
+            code: (error as { code?: string } | null)?.code,
+          },
+        },
         'unhandled error',
       );
     }
