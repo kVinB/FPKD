@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+deploy/**/secrets/
+
+# Runtime data (SQLite + sidecars)
+/data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Backups and exports
+backups/
+*.backup
+*.bak
+
+# Test and tooling artifacts
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+.vitest/
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
