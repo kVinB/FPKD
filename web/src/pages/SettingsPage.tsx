@@ -268,6 +268,9 @@ export function SettingsPage(): JSX.Element {
           Timed events are grouped by their local date in this zone. Date-only events keep their
           recorded calendar date.
         </p>
+        <label htmlFor="settings-zone" className="field-label">
+          Reporting time zone
+        </label>
         <ZoneSelect id="settings-zone" value={zone} onChange={setZone} />
         <button
           type="button"

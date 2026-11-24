@@ -1,5 +1,7 @@
 # Seizure Diary (FPKD)
 
+[![CI](https://github.com/kVinB/FPKD/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kVinB/FPKD/actions/workflows/ci.yml)
+
 A private, mobile-first family diary for recording self-reported episodes, reviewing
 logged frequency, and preparing a readable, selectable-text PDF for a neurology
 appointment.
@@ -69,7 +71,10 @@ CSRF_SECRET="$(openssl rand -base64 32)" npm start
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run lint` | ESLint |
 | `npm test` | Unit + real SQLite/API integration + deploy script checks |
-| `npm run e2e` | Production build + Playwright (Chromium desktop/mobile) |
+| `npm run e2e` | Production build + Playwright (Chromium desktop/mobile, axe) |
+| `npm run e2e:all` | Same with Firefox, WebKit, iPhone emulation and 320 px profile |
+| `npm run bench` | 10k-event warmed analytics/report-model benchmark |
+| `npm run e2e:perf` | 500-entry PDF timing (sets `PERF=1`) |
 | `npm run db:migrate` | Apply migrations |
 | `npm run db:bootstrap-admin` | Guest-local first admin bootstrap |
 | `npm run db:reset-password -- <username>` | Operator recovery |
@@ -123,20 +128,40 @@ the application supports.
   impersonate an account after a password reset. App-level separation does not protect
   against host compromise.
 
-## Testing and verified results
+## CI and verified results
+
+GitHub Actions (`.github/workflows/ci.yml`) runs:
+
+- **verify**: `npm ci`, typecheck, lint, 89 unit/integration/deploy tests, production
+  build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
+  emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
+  page checks.
+- **docker**: non-root image build, Compose health/smoke test, private API `401` check,
+  and teardown. Docker is verified in CI only (the local workspace has no Docker).
+- **Benchmark** (manual `workflow_dispatch`): 10,000-event analytics and 500-entry PDF
+  timing.
 
 Actual commands run in this workspace and outcomes:
 
 ```sh
-npm run typecheck   # passed
-npm run lint        # passed
-npm test            # 89 passed (52 unit, 32 SQLite/API integration, 5 deploy shell checks)
-npm run build       # passed (SPA + API/CLI bundles)
-npm run e2e         # 5 passed, 1 skipped (multipage PDF is desktop-only)
+npm run typecheck                              # passed
+npm run lint                                   # passed
+npm test                                       # 89 passed
+npm run build                                  # passed (SPA + API/CLI bundles)
+npm run e2e                                    # 5 passed, 1 skipped (Chromium)
+E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 14 passed, 16 skipped (per-project gating)
+npm run bench                                  # 10k events: p95 489.2 ms query+aggregate
+PERF=1 npm run e2e:perf                        # 500-entry PDF: 7.9 s, 23 pages
 ```
 
-The Playwright run builds the production bundle, boots a real server against a temp
-SQLite database, and covers Chromium desktop and Pixel-7 emulation:
+Benchmark numbers are from one warmed run on this machine, not a universal claim. The
+10,000-event 90-day query+aggregation p95 was **489.2 ms** (target 500 ms); report-model
+construction p95 was **1,960.6 ms**; the 500-entry PDF met the 10 s target at **7.9 s**
+after compacting the PDF event layout.
+
+The browser suite boots the production bundle against a temp SQLite database and covers
+desktop and mobile layouts across Chromium, Firefox and WebKit (iPhone-13 emulation, not a
+real device):
 
 - admin login → create member → one-time temporary password → forced password change;
 - log event with Arms+Speech, estimated duration, trigger, rescue use, label/notes;
@@ -147,15 +172,16 @@ SQLite database, and covers Chromium desktop and Pixel-7 emulation:
 - admin's own journal remains empty (app-level isolation);
 - no cross-origin network requests;
 - multipage PDF (40 events, long notes) with searchable text, continuation labels and
-  page numbers;
-- automated axe check on login, journal and new-event form at desktop and mobile
-  widths (no serious/critical WCAG 2.2 A/AA violations).
+  page numbers, plus rendered-page PNGs and blank-page guards when `PDF_RENDER=1`;
+- 320 px layout with no horizontal page scroll and ≥44 px interactive controls;
+- axe (WCAG 2.2 A/AA tags) on login, journal, new event, analytics, reports, settings and
+  admin accounts at desktop/mobile/320 px widths, with no serious/critical violations.
 
 ### Acceptance-test coverage (A01–A15)
 
 | ID | Status | Evidence |
 |---|---|---|
-| A01 | Partially verified | Integration minimal save + reload + service restart; e2e mobile save/reload at 412 px. **320–390 px not visually checked.** |
+| A01 | Verified | Integration save/reload/restart; e2e save/reload at 320, 412 and desktop widths; no horizontal overflow. |
 | A02 | Verified | Unit all 7 area combos; integration full round-trip, stale edit/delete conflict, invalid values; e2e journal/detail/PDF. |
 | A03 | Verified | Unit + integration gap rejection, repeated-offset instants one hour apart, date-only fixed, timed midnight bucket change. |
 | A04 | Verified | Integration boundary events, zero buckets, clipped weeks, multi-tag event counted once, chart/table/report totals agree. |
@@ -164,9 +190,9 @@ SQLite database, and covers Chromium desktop and Pixel-7 emulation:
 | A07 | Verified | Integration export/import round-trip, malformed/unsupported/duplicate/stale rejection, v1 conversion, clear-all. |
 | A08 | Partially verified | Service restart persistence verified; in-memory draft after connectivity loss is implemented but not automated. |
 | A09 | Partially verified | Stable-ID retry, concurrent double submit, revision conflicts, stale epoch verified. **Injected SQLite write failure not simulated.** |
-| A10 | Partially verified | Headers/CSP/no-store, CSRF, origin, hostile text, no third-party e2e requests verified. **Production network trace beyond Chromium not captured.** |
-| A11 | Partially verified | Axe (WCAG 2.2 A/AA tags) reports no serious/critical violations on login, journal and new-event form at desktop/mobile widths. **No VoiceOver/NVDA or zoomed-layout manual pass.** |
-| A12 | Partially verified | Text extracted from single/multipage PDFs; pagination and continuation labels asserted. **Pages not visually inspected; no clipping/overlap visual check.** |
+| A10 | Verified | Headers/CSP/no-store, CSRF, origin, hostile text and no third-party requests verified in Chromium, Firefox and WebKit; production build under test. |
+| A11 | Partially verified | Axe reports no serious/critical WCAG 2.2 A/AA violations on 7 screens across 6 browser/viewport profiles. **No manual VoiceOver/NVDA or zoomed-layout pass.** |
+| A12 | Partially verified | Text extracted from single/multipage PDFs; continuation labels/page numbers and rendered-page blank/clip guards verified. **Human visual sign-off remains.** |
 | A13 | Verified | CLI-only bootstrap (second attempt refused), admin provisioning, one-time/expiring temp password, restricted session, reset/disable/enable revocation. |
 | A14 | Verified | Two members + admin: direct access, queries, analytics, reports, export and restore stay owner-scoped; restore/clear do not touch others. |
 | A15 | Not verified | Requires real Proxmox, LAN/WireGuard and external network checks; not available here. |
@@ -213,28 +239,30 @@ Full details: [`deploy/proxmox/README.md`](./deploy/proxmox/README.md).
 
 A non-root multi-stage `Dockerfile`, `deploy/docker-compose.yml` (persistent `/data`,
 loopback-only bind, read-only root, dropped capabilities, health check) and
-`deploy/.env.example` are provided for a dedicated Debian VM. **Docker is not installed
-in this workspace, so the image was not built or run here.** Do not use Docker nesting
-in LXC; use the native LXC path or a VM.
+`deploy/.env.example` are provided for a dedicated Debian VM. CI builds the image and
+runs a Compose health/smoke test; the local workspace has no Docker, so local execution
+remains unverified. Do not use Docker nesting in LXC; use the native LXC path or a VM.
 
 ## Known limitations / unverified environments
 
 - Real Proxmox `pct`/`pveam` provisioning, LAN/WireGuard ingress, external blocking,
   and isolated-restore acceptance were **not** run (no Proxmox/network access here).
-- Docker image build/runtime not executed (no Docker here).
-- Firefox and WebKit Playwright runs were not executed; only Chromium desktop and
-  Pixel-7 emulation were run. **iPhone Safari and real devices are not verified.**
+- Docker is built/smoke-tested in CI only; local Docker execution is unverified.
+- Real iPhone Safari and real devices are not verified; WebKit coverage is emulation.
 - A11 has automated axe coverage but still lacks manual screen-reader (VoiceOver/NVDA)
   and zoomed-layout acceptance.
-- PDF pages were not visually inspected for clipping/overlap (text extraction only).
-- 320–390 px layout, 10,000-event p95 performance targets, and 500-entry PDF timing were
-  not measured.
+- A12 has automated text/pagination/rendered-page checks; human visual sign-off remains.
+- A08 offline-draft behavior and A09 injected SQLite-write failure are implemented but
+  not automated.
+- Performance numbers are from this workspace (10k p95 489.2 ms; 500-entry PDF 7.9 s)
+  and are not universal.
 - No clinical validation, E2EE, PDF/UA conformance, or regulatory compliance is claimed.
 
 ## Repository status
 
-Initial implementation of the P0 scope (auth/admin, diary CRUD with affected areas,
-analytics, privacy-controlled PDF, personal backup/restore/clear, operator tooling).
-P1 per-area/per-tag breakdown: per-area counts are present; per-tag counts are not yet
-added. Do not deploy with real health data until the unverified deployment and
-accessibility checks in the acceptance table are completed.
+P0 implementation plus CI hardening: auth/admin, diary CRUD with affected areas,
+analytics, privacy-controlled PDF, personal backup/restore/clear, operator tooling,
+cross-browser browser tests, 320 px layout checks, automated accessibility, PDF render
+guards and performance benchmarks. P1 per-area/per-tag breakdown: per-area counts are
+present; per-tag counts are not yet added. Do not deploy with real health data until the
+remaining deployment (A15) and manual accessibility/visual checks are completed.

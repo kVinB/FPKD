@@ -1,0 +1,39 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: 10k-event analytics and 500-entry PDF timing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Warmed 90-day query and aggregation
+        run: npm run bench | tee benchmark.txt
+      - run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: 500-entry PDF timing
+        env:
+          PERF: "1"
+        run: npx playwright test tests/e2e/perf.spec.ts --project=desktop-chromium
+      - name: Upload benchmark outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark.txt
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore

@@ -13,80 +13,68 @@ Font.register({
 
 const styles = StyleSheet.create({
   page: {
-    paddingTop: 42,
-    paddingBottom: 52,
-    paddingHorizontal: 40,
+    paddingTop: 30,
+    paddingBottom: 38,
+    paddingHorizontal: 28,
     fontFamily: 'DejaVu',
-    fontSize: 9,
-    lineHeight: 1.35,
+    fontSize: 7.6,
+    lineHeight: 1.16,
     color: '#111827',
   },
   footer: {
     position: 'absolute',
-    bottom: 20,
-    left: 40,
-    right: 40,
+    bottom: 16,
+    left: 32,
+    right: 32,
     borderTopWidth: 1,
     borderTopColor: '#cbd5e1',
-    paddingTop: 5,
-    fontSize: 7.5,
+    paddingTop: 4,
+    fontSize: 7,
     color: '#475569',
   },
   runningHeader: {
     position: 'absolute',
-    top: 20,
-    left: 40,
-    right: 40,
-    fontSize: 7.5,
+    top: 16,
+    left: 32,
+    right: 32,
+    fontSize: 7,
     color: '#64748b',
     textAlign: 'right',
   },
-  title: { fontSize: 18, fontWeight: 'bold', marginBottom: 2 },
-  subtitle: { fontSize: 9, color: '#334155', marginBottom: 10 },
+  title: { fontSize: 17, fontWeight: 'bold', marginBottom: 2 },
+  subtitle: { fontSize: 8.5, color: '#334155', marginBottom: 8 },
   sectionTitle: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: 'bold',
-    marginTop: 12,
-    marginBottom: 5,
+    marginTop: 9,
+    marginBottom: 4,
     borderBottomWidth: 1,
     borderBottomColor: '#cbd5e1',
     paddingBottom: 2,
   },
-  summaryRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
-  summaryItem: { width: '50%', marginBottom: 3 },
-  label: { color: '#475569', fontSize: 8 },
-  value: { fontSize: 9 },
+  summaryRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 3 },
+  summaryItem: { width: '50%', marginBottom: 2 },
+  label: { color: '#475569', fontSize: 7.5 },
+  value: { fontSize: 8.5 },
   event: {
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 3,
-    padding: 7,
-    marginBottom: 7,
-  },
-  eventHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
     borderBottomWidth: 0.5,
     borderBottomColor: '#e2e8f0',
-    paddingBottom: 3,
+    paddingTop: 2,
+    paddingBottom: 2,
+    marginBottom: 2,
   },
-  eventDate: { fontSize: 10, fontWeight: 'bold' },
-  eventTime: { fontSize: 8, color: '#334155' },
-  row: { flexDirection: 'row', marginBottom: 2 },
-  rowLabel: { width: 92, color: '#475569', fontSize: 8 },
-  rowValue: { flex: 1, fontSize: 9 },
-  notes: { marginTop: 3 },
+  eventHeaderLine: { fontSize: 8, fontWeight: 'bold', marginBottom: 0.5 },
+  line: { fontSize: 7.6 },
+  bold: { fontWeight: 'bold' },
   notice: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
     backgroundColor: '#f8fafc',
-    padding: 6,
-    marginBottom: 10,
-    fontSize: 8,
+    padding: 5,
+    marginBottom: 8,
+    fontSize: 7.5,
     color: '#334155',
   },
-  continued: { fontSize: 9, fontWeight: 'bold', color: '#334155', marginBottom: 8 },
 });
 
 function medianText(value: number | null, count: number): string {
@@ -98,6 +86,23 @@ function medianText(value: number | null, count: number): string {
       : `${value}s`
     : `${value}s`;
   return `${text} (${count} recorded)`;
+}
+
+function rescueDetail(event: ReportModel['events'][number]): string {
+  if (event.rescue.administrations.length === 0) return event.rescue.display;
+  const details = event.rescue.administrations
+    .map((administration, index) => {
+      const parts = [
+        administration.name ? `Name: ${administration.name}` : null,
+        administration.doseAsReported ? `Dose as reported: ${administration.doseAsReported}` : null,
+        administration.timingAsReported
+          ? `Timing as reported: ${administration.timingAsReported}`
+          : null,
+      ].filter(Boolean);
+      return `${index + 1}. ${parts.join(' · ')}`;
+    })
+    .join('   ');
+  return `${event.rescue.display} · ${details}`;
 }
 
 export function ReportDocument({ model }: { model: ReportModel }): JSX.Element {
@@ -169,76 +174,32 @@ export function ReportDocument({ model }: { model: ReportModel }): JSX.Element {
             <Text style={styles.sectionTitle}>Logged events</Text>
             {model.events.map((event) => (
               <View key={event.id} style={styles.event}>
-                <View style={styles.eventHeader}>
-                  <Text style={styles.eventDate}>{event.reportDate}</Text>
-                  <Text style={styles.eventTime}>
-                    {event.occurred.timeDisplay}
-                    {event.occurred.approximate ? ' approx.' : ''} · {event.occurred.zone}
-                    {event.occurred.offset ? ` (${event.occurred.offset})` : ''}
-                    {event.occurred.differsFromReportDate
-                      ? ` · recorded ${event.occurred.date}`
-                      : ''}
-                  </Text>
-                </View>
-                {event.eventLabel ? (
-                  <View style={styles.row}>
-                    <Text style={styles.rowLabel}>Label</Text>
-                    <Text style={styles.rowValue}>{event.eventLabel}</Text>
-                  </View>
-                ) : null}
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Precision</Text>
-                  <Text style={styles.rowValue}>{event.occurred.precision}</Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Duration</Text>
-                  <Text style={styles.rowValue}>{event.duration.label}</Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Affected areas</Text>
-                  <Text style={styles.rowValue}>{event.affectedAreas.display}</Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Triggers</Text>
-                  <Text style={styles.rowValue}>{event.triggers.display}</Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Aura / warning</Text>
-                  <Text style={styles.rowValue}>{event.aura.display}</Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.rowLabel}>Rescue medication</Text>
-                  <Text style={styles.rowValue}>{event.rescue.display}</Text>
-                </View>
-                {event.rescue.administrations.length > 0 ? (
-                  <View style={styles.row}>
-                    <Text style={styles.rowLabel}>Administrations</Text>
-                    <View style={styles.rowValue}>
-                      {event.rescue.administrations.map((administration, index) => (
-                        <Text key={index}>
-                          {index + 1}.{' '}
-                          {[
-                            administration.name ? `Name: ${administration.name}` : null,
-                            administration.doseAsReported
-                              ? `Dose as reported: ${administration.doseAsReported}`
-                              : null,
-                            administration.timingAsReported
-                              ? `Timing as reported: ${administration.timingAsReported}`
-                              : null,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </Text>
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-                {event.notes ? (
-                  <View style={styles.notes}>
-                    <Text style={styles.label}>Notes</Text>
-                    <Text style={styles.rowValue}>{event.notes}</Text>
-                  </View>
-                ) : null}
+                <Text style={styles.eventHeaderLine}>
+                  {event.reportDate} · {event.occurred.timeDisplay}
+                  {event.occurred.approximate ? ' approx.' : ''} · {event.occurred.zone}
+                  {event.occurred.offset ? ` (${event.occurred.offset})` : ''} ·{' '}
+                  {event.occurred.precision}
+                  {event.occurred.differsFromReportDate
+                    ? ` · recorded ${event.occurred.date}`
+                    : ''}
+                </Text>
+                <Text style={styles.line}>
+                  {event.eventLabel ? (
+                    <>
+                      <Text style={styles.bold}>Label:</Text> {event.eventLabel} ·{' '}
+                    </>
+                  ) : null}
+                  <Text style={styles.bold}>Affected areas:</Text> {event.affectedAreas.display}{' '}
+                  · <Text style={styles.bold}>Duration:</Text> {event.duration.label} ·{' '}
+                  <Text style={styles.bold}>Triggers:</Text> {event.triggers.display} ·{' '}
+                  <Text style={styles.bold}>Aura / warning:</Text> {event.aura.display} ·{' '}
+                  <Text style={styles.bold}>Rescue medication:</Text> {rescueDetail(event)}
+                  {event.notes ? (
+                    <>
+                      {' '}· <Text style={styles.bold}>Notes:</Text> {event.notes}
+                    </>
+                  ) : null}
+                </Text>
               </View>
             ))}
           </>
