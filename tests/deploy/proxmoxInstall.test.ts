@@ -165,6 +165,72 @@ exit 0
 `,
   );
 
+  writeMock(
+    bin,
+    'whiptail',
+    `#!/usr/bin/env bash
+printf 'whiptail %s\\n' "$*" >> "$MOCK_LOG"
+mode=""
+title=""
+prompt=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --title) title="$2"; shift 2 ;;
+    --default-item) shift 2 ;;
+    --clear|--defaultno) shift ;;
+    --menu) mode="menu"; prompt="$2"; break ;;
+    --inputbox) mode="input"; prompt="$2"; break ;;
+    --passwordbox) mode="password"; prompt="$2"; break ;;
+    --yesno) mode="yesno"; prompt="$2"; break ;;
+    --msgbox) mode="msgbox"; prompt="$2"; break ;;
+    *) shift ;;
+  esac
+done
+case "$mode" in
+  menu)
+    case "$prompt" in
+      *"Choose the Debian guest type"*) reply="lxc" ;;
+      *"Select the Proxmox storage ID"*)
+        case "$title" in
+          *"Template storage"*) reply="local" ;;
+          *) reply="local" ;;
+        esac
+        ;;
+      *"Choose a downloaded template"*) reply="__download__" ;;
+      *"Select the network bridge."*) reply="vmbr0" ;;
+      *"Install the latest runner-built release"*) reply="latest" ;;
+      *"Choose how to download"*) reply="public" ;;
+      *) reply="local" ;;
+    esac
+    printf '%s\\n' "$reply" >&2
+    exit 0
+    ;;
+  input)
+    case "$prompt" in
+      *"Repository (owner/name)"*) reply="kVinB/FPKD" ;;
+      *"Guest hostname"*) reply="interactive-diary" ;;
+      *"VMID/CTID"*) reply="240" ;;
+      *"vCPUs"*) reply="1" ;;
+      *"Memory in MiB"*) reply="2048" ;;
+      *"Disk size in GiB"*) reply="8" ;;
+      *"DNS"*) reply="" ;;
+      *"VLAN"*) reply="" ;;
+      *) reply="" ;;
+    esac
+    printf '%s\\n' "$reply" >&2
+    exit 0
+    ;;
+  password)
+    printf 'test-token\\n' >&2
+    exit 0
+    ;;
+  yesno) exit 0 ;;
+  msgbox) exit 0 ;;
+  *) exit 0 ;;
+esac
+`,
+  );
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PATH: `${bin}:${process.env.PATH ?? ''}`,
@@ -173,6 +239,8 @@ exit 0
     MOCK_TEMPLATE_VOLID: TEMPLATE,
     MOCK_ROOTDIR_STORAGES: storages,
     MOCK_BRIDGE_EXISTS: options.bridgeExists === false ? '0' : '1',
+    WHIPTAIL: path.join(bin, 'whiptail'),
+    SEIZURE_DIARY_FORCE_UI: '1',
     ...(options.conflictId ? { MOCK_CONFLICT_ID: options.conflictId } : {}),
   };
 
@@ -199,6 +267,8 @@ function runInstall(
     'MOCK_TEMPLATE_VOLID',
     'MOCK_ROOTDIR_STORAGES',
     'MOCK_BRIDGE_EXISTS',
+    'WHIPTAIL',
+    'SEIZURE_DIARY_FORCE_UI',
     ...(mock.env.MOCK_CONFLICT_ID ? ['MOCK_CONFLICT_ID'] : []),
   ];
   const result = IS_ROOT
@@ -295,6 +365,26 @@ describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
       expect(log).not.toMatch(/pct (create|start|push|exec|destroy)/);
       expect(log).not.toMatch(/pveam download/);
       expect(log).toContain('pct status 211');
+    } finally {
+      mock.cleanup();
+    }
+  });
+
+  it('prompts for an LXC storage in interactive mode and performs a dry-run', () => {
+    const mock = createMockEnv();
+    try {
+      const result = runInstall(mock, ['--interactive', '--dry-run']);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Guest type         : lxc');
+      expect(result.stdout).toContain('Root filesystem    : local:8 GiB');
+      expect(result.stdout).toContain('interactive-diary');
+      expect(result.stdout).toContain('Dry run complete');
+      const log = mock.readLog();
+      expect(log).toContain('pvesm status -content rootdir');
+      expect(log).toContain('pvesm status -content vztmpl');
+      expect(log).toContain('whiptail');
+      expect(log).not.toMatch(/pct (create|start|push|exec|destroy)/);
+      expect(log).not.toMatch(/pveam download/);
     } finally {
       mock.cleanup();
     }

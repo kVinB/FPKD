@@ -1,8 +1,9 @@
 # Proxmox install, VM/LXC bootstrap and runner-built updates
 
 This directory installs **Seizure Diary** on Proxmox VE from a prebuilt GitHub
-release. The default path creates a dedicated **Debian 12 QEMU VM** from the
-official cloud image; an unprivileged **Debian 12 LXC** is also supported.
+release. The guided installer defaults to an unprivileged **Debian 12 LXC**; a
+dedicated **Debian 12 QEMU VM** is also selectable. The interactive flow asks for
+the Proxmox storage ID, template storage, bridge, network and credentials.
 
 Application builds happen on **GitHub Actions runners**, not on the Proxmox host
 or guest. A successful `main` build creates the next `YYYYMMDD.VV` tag and
@@ -17,8 +18,9 @@ permissions are not end-to-end encryption.
 
 | File | Purpose |
 |---|---|
-| `install.sh` | Proxmox host entry point: creates VM/LXC, validates storage/network, stages the guest bootstrap |
+| `install.sh` | Proxmox host entry point: guided LXC/VM prompts, storage validation, stages the guest bootstrap |
 | `install-guest.sh` | Guest bootstrap: runtime packages, Node LTS, token, release download/extract, systemd |
+| `../../scripts/package-installer.mjs` | Builds the single-file `seizure-diary-installer-<tag>.sh` release asset |
 | `release.mjs` | GitHub Release resolver/downloader with SHA-256 verification |
 | `seizure-diary` | Management command installed at `/usr/local/bin/seizure-diary` |
 | `update.sh` | Manual artifact update transaction installed at `/opt/seizure-diary/update.sh` |
@@ -32,13 +34,15 @@ permissions are not end-to-end encryption.
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`:
 
 1. Resolve the next `YYYYMMDD.VV` tag (UTC date, two-digit build number).
-2. Typecheck, lint, dependency audit, 114 tests, production build, Docker/Compose
+2. Typecheck, lint, dependency audit, 116 tests, production build, Docker/Compose
    smoke test and the full browser matrix.
 3. On a successful `main` push, create the annotated git tag.
 4. Build the deployment bundle inside `node:22.13.1-bookworm-slim` (Debian 12,
-   matching the guest) and publish:
+   matching the guest), generate the self-contained installer, and publish:
    - `seizure-diary-<tag>.tar.gz`
    - `seizure-diary-<tag>.tar.gz.sha256`
+   - `seizure-diary-installer-<tag>.sh`
+   - `seizure-diary-installer-<tag>.sh.sha256`
 5. Create/update the GitHub Release for that tag.
 
 The bundle contains `dist/`, production `node_modules/`, `package.json`,
@@ -57,14 +61,42 @@ The bundle contains `dist/`, production `node_modules/`, `package.json`,
    nodejs.org (pinned Node LTS tarball).
 5. For a private repository, a **read-only GitHub token**:
    - Prefer a fine-grained token scoped to this repository with **Contents: read**.
-   - Store it on the Proxmox host in a 0600 file; pass it with `--token-file`.
+   - The guided installer offers a hidden paste prompt and saves it on the host as
+     `/root/seizure-diary-github-token` with mode 0600, or you can pass `--token-file`.
    - The guest stores it at `/etc/seizure-diary/github-token` as `0400 root`.
    - Rotate/revoke it if the guest is compromised. Do not commit tokens or put
      them in command lines, URLs or logs.
 
-## Step 1 — install from the Proxmox VE shell
+## Step 1 — copy/paste installer (recommended)
 
-VM (default):
+Open the private GitHub Release page and copy
+`seizure-diary-installer-<tag>.sh` into a root-owned file on the Proxmox host:
+
+```sh
+nano /root/seizure-diary-install.sh
+sudo bash /root/seizure-diary-install.sh
+```
+
+The script asks for LXC (default) or VM, the Proxmox **storage ID**, template
+storage, bridge, network, release version and token. It verifies its embedded
+scripts before running. To use the multi-file source instead, copy this directory
+to the host and run `install.sh` with flags.
+
+LXC (default in the guided flow):
+
+```sh
+sudo ./deploy/proxmox/install.sh \
+  --type lxc \
+  --ctid 210 \
+  --rootfs-storage <rootdir-storage> \
+  --template-storage <vztmpl-storage> \
+  --bridge vmbr0 \
+  --repo kVinB/FPKD \
+  --token-file /root/seizure-diary-github-token \
+  --yes
+```
+
+VM:
 
 ```sh
 sudo ./deploy/proxmox/install.sh \
@@ -76,23 +108,6 @@ sudo ./deploy/proxmox/install.sh \
   --ip 10.20.0.10/24 \
   --gateway 10.20.0.1 \
   --dns 10.20.0.1 \
-  --repo kVinB/FPKD \
-  --token-file /root/seizure-diary-github-token \
-  --yes
-```
-
-LXC:
-
-```sh
-sudo ./deploy/proxmox/install.sh \
-  --type lxc \
-  --ctid 210 \
-  --hostname seizure-diary \
-  --rootfs-storage <rootdir-storage> \
-  --template-storage <vztmpl-storage> \
-  --bridge vmbr0 \
-  --ip 10.20.0.10/24 \
-  --gateway 10.20.0.1 \
   --repo kVinB/FPKD \
   --token-file /root/seizure-diary-github-token \
   --yes
@@ -258,9 +273,11 @@ sidecars and revokes all sessions.
   real Proxmox host**. Real VM boot, cloud-init/SSH, artifact download with a real
   token, LAN/WireGuard ingress and isolated restore remain deployment acceptance
   checks.
-- The GitHub Actions release job now produces a real bundle (tag `20261124.03`) and the
-  GitHub API/asset download was validated with a repository token. The guest-local `0400`
-  token file path and real VM/LXC boot still need operator acceptance.
+- The GitHub Actions release job produced a real bundle and the GitHub API/asset
+  download was validated with a repository token. The single-file installer asset is
+  built by the release job; interactive storage selection is covered by mocked `whiptail`
+  tests. Guest-local `0400` token handling, real VM/LXC boot and LAN/WireGuard ingress
+  still need operator acceptance.
 - Do not use a privileged container, Docker nesting, public exposure or a
   personal token with broader scope to work around local test problems.
 - Debian/Proxmox upgrades and firewall changes are separate lifecycles.
