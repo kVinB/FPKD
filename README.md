@@ -133,7 +133,7 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, typecheck, lint, 93 unit/integration/deploy tests, production
+- **verify**: `npm ci`, typecheck, lint, 94 unit/integration/deploy tests, production
   build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
@@ -142,6 +142,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs:
 - **Benchmark** (manual `workflow_dispatch`): 10,000-event analytics and 500-entry PDF
   timing.
 
+Project policies are in [`SECURITY.md`](./SECURITY.md) and [`AGENTS.md`](./AGENTS.md).
 Manual checks that cannot be automated are tracked in
 [`docs/manual-acceptance.md`](./docs/manual-acceptance.md) (real iPhone Safari, screen
 reader/zoom, human PDF visual review, Proxmox/LAN/WireGuard, backup/restore drill).
@@ -151,7 +152,7 @@ Actual commands run in this workspace and outcomes:
 ```sh
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 93 passed
+npm test                                       # 94 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
@@ -180,6 +181,8 @@ real device):
   browser/viewport profiles;
 - injected SQLite insert/update failures return `503`, roll back partial tags and
   preserve the prior revision;
+- operator CLI encrypted backup → verify → restore round-trip, including session
+  revocation and retention;
 - multipage PDF (40 events, long notes) with searchable text, continuation labels and
   page numbers, plus rendered-page PNGs and blank-page guards when `PDF_RENDER=1`;
 - 320 px layout with no horizontal page scroll and ≥44 px interactive controls;
