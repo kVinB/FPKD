@@ -36,7 +36,7 @@ describe('build version resolution', () => {
   it('starts at .01 for the first untagged build of the UTC date', () => {
     const dir = createRepo();
     try {
-      expect(computeBuildVersion({ cwd: dir, date: NOON })).toBe('20261124.01');
+      expect(computeBuildVersion({ cwd: dir, date: NOON, override: '' })).toBe('20261124.01');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -47,7 +47,7 @@ describe('build version resolution', () => {
     try {
       git(dir, ['tag', '20261124.01']);
       commit(dir, 'second.txt');
-      expect(computeBuildVersion({ cwd: dir, date: NOON })).toBe('20261124.02');
+      expect(computeBuildVersion({ cwd: dir, date: NOON, override: '' })).toBe('20261124.02');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -57,9 +57,9 @@ describe('build version resolution', () => {
     const dir = createRepo();
     try {
       git(dir, ['tag', '20261123.04']);
-      expect(computeBuildVersion({ cwd: dir, date: NOON })).toBe('20261123.04');
+      expect(computeBuildVersion({ cwd: dir, date: NOON, override: '' })).toBe('20261123.04');
       git(dir, ['tag', '20261124.03']);
-      expect(computeBuildVersion({ cwd: dir, date: NOON })).toBe('20261124.03');
+      expect(computeBuildVersion({ cwd: dir, date: NOON, override: '' })).toBe('20261124.03');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

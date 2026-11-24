@@ -6,6 +6,7 @@ RUN npm ci
 COPY shared ./shared
 COPY server ./server
 COPY web ./web
+COPY scripts ./scripts
 COPY tsconfig.json vite.config.ts tailwind.config.js postcss.config.js ./
 ARG BUILD_VERSION=dev
 ENV BUILD_VERSION=$BUILD_VERSION
