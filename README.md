@@ -98,8 +98,9 @@ the application supports.
 - **Analytics**: day/Monday-week/month buckets in the reporting zone, zero-filled,
   clipped edges marked partial, paginated; one event counts once even with multiple
   areas/tags/administrations; total, days with entries, rescue-used events, median of
-  known durations; optional descriptive per-area counts. No predictions or causal
-  claims.
+  known durations; descriptive per-area and per-trigger/per-aura counts with answered
+  totals. Tag counts can sum above the event total and are reported labels, not causes or
+  diagnoses. No predictions or causal claims.
 - **Reports**: server-authorised, privacy-projected HTML preview frozen with a data
   version, dataset epoch and digest. Name and notes are excluded by default. Download
   verifies freshness before client-side PDF generation. Neutral filename, A4, page
@@ -132,7 +133,7 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, typecheck, lint, 91 unit/integration/deploy tests, production
+- **verify**: `npm ci`, typecheck, lint, 92 unit/integration/deploy tests, production
   build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
@@ -146,7 +147,7 @@ Actual commands run in this workspace and outcomes:
 ```sh
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 91 passed
+npm test                                       # 92 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
@@ -166,7 +167,7 @@ real device):
 - admin login → create member → one-time temporary password → forced password change;
 - log event with Arms+Speech, estimated duration, trigger, rescue use, label/notes;
 - reload persistence, detail view, edit;
-- analytics chart/table;
+- analytics chart/table, plus descriptive trigger/aura tag counts with answered totals;
 - report preview with name/notes off, PDF download, **extracted PDF text** asserted for
   affected areas/label and asserted absent for notes/name;
 - admin's own journal remains empty (app-level isolation);
@@ -262,9 +263,10 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
 
 ## Repository status
 
-P0 implementation plus CI hardening: auth/admin, diary CRUD with affected areas,
-analytics, privacy-controlled PDF, personal backup/restore/clear, operator tooling,
-cross-browser browser tests, 320 px layout checks, automated accessibility, PDF render
-guards and performance benchmarks. P1 per-area/per-tag breakdown: per-area counts are
-present; per-tag counts are not yet added. Do not deploy with real health data until the
+P0 implementation plus CI hardening and the P1 descriptive breakdown: auth/admin, diary
+CRUD with affected areas, analytics with per-area and per-trigger/per-aura counts,
+privacy-controlled PDF, personal backup/restore/clear, operator tooling, cross-browser
+tests, 320 px layout checks, automated accessibility, PDF render guards and performance
+benchmarks. Tag counts are reported labels only, with no causal or diagnostic inference,
+and can sum above the logged-event total. Do not deploy with real health data until the
 remaining deployment (A15) and manual accessibility/visual checks are completed.

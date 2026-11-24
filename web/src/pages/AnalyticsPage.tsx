@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Bucket } from '@shared/range';
-import type { AnalyticsResult, Granularity } from '@shared/range';
+import type { AnalyticsResult, Bucket, Granularity, TagCount } from '@shared/range';
 import type { AffectedArea, DiarySettings } from '@shared/types';
 import { formatDuration, formatPlainDate, todayInZone } from '@shared/time';
 import { api, errorMessage } from '../api';
@@ -40,6 +39,44 @@ function bucketLabel(bucket: Bucket, granularity: Granularity): string {
 function bucketRangeLabel(bucket: Bucket, granularity: Granularity): string {
   if (granularity === 'day') return formatPlainDate(bucket.start);
   return `${formatPlainDate(bucket.start)} – ${formatPlainDate(bucket.end)}`;
+}
+
+function TagBreakdown({
+  title,
+  counts,
+  answered,
+}: {
+  title: string;
+  counts: TagCount[];
+  answered: number;
+}): JSX.Element {
+  const max = Math.max(1, ...counts.map((tag) => tag.count));
+  return (
+    <div>
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="muted mt-1">Entries with an answer: {answered}</p>
+      {counts.length === 0 ? (
+        <p className="muted mt-2">No reported tags in this range.</p>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {counts.map((tag) => (
+            <li key={tag.id}>
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <span>{tag.label}</span>
+                <span className="font-semibold">{tag.count}</span>
+              </div>
+              <div className="mt-1 h-2 rounded bg-slate-100" aria-hidden="true">
+                <div
+                  className="h-2 rounded bg-teal-600"
+                  style={{ width: `${Math.round((tag.count / max) * 100)}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function medianLabel(value: number | null, count: number): string {
@@ -456,6 +493,30 @@ export function AnalyticsPage(): JSX.Element {
             One event counts once per selected area, so these can sum above the logged-event
             total. Entries with an area answer: {summary.areaAnswered}.
           </p>
+        </section>
+      ) : null}
+
+      {summary && (summary.triggerAnswered > 0 || summary.auraAnswered > 0) ? (
+        <section className="card space-y-3" aria-labelledby="tags-heading">
+          <h2 id="tags-heading" className="text-lg font-semibold">
+            Tag breakdown (descriptive)
+          </h2>
+          <p className="muted text-xs">
+            One event counts once per tag, so these counts can sum above the logged-event total.
+            These are reported labels, not causes or diagnoses.
+          </p>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <TagBreakdown
+              title="Possible triggers"
+              counts={summary.triggerTagCounts}
+              answered={summary.triggerAnswered}
+            />
+            <TagBreakdown
+              title="Aura / warning"
+              counts={summary.auraTagCounts}
+              answered={summary.auraAnswered}
+            />
+          </div>
         </section>
       ) : null}
 

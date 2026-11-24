@@ -5,6 +5,7 @@ import type {
   PlainDateString,
   Rescue,
   SeizureEvent,
+  TagAnswer,
 } from './types';
 import { differenceInCalendarDays, parsePlainDate, reportDateFor } from './time';
 
@@ -156,6 +157,12 @@ export function buildBuckets(range: ReportRange): Bucket[] {
   return buckets;
 }
 
+export interface TagCount {
+  id: string;
+  label: string;
+  count: number;
+}
+
 export interface AnalyticsSummary {
   totalEvents: number;
   distinctDates: number;
@@ -164,6 +171,10 @@ export interface AnalyticsSummary {
   medianDurationSeconds: number | null;
   areaCounts: Record<AffectedArea, number>;
   areaAnswered: number;
+  triggerTagCounts: TagCount[];
+  auraTagCounts: TagCount[];
+  triggerAnswered: number;
+  auraAnswered: number;
 }
 
 export interface AnalyticsResult {
@@ -190,6 +201,34 @@ export interface AggregateOptions {
   dataVersion?: number;
 }
 
+function collectTagCounts(
+  answer: TagAnswer,
+  counts: Map<string, { label: string; count: number }>,
+): number {
+  if (answer.status === 'not_recorded') return 0;
+  if (answer.status !== 'reported') return 1;
+  const seen = new Set<string>();
+  for (const tag of answer.tags) {
+    if (seen.has(tag.id)) continue;
+    seen.add(tag.id);
+    const existing = counts.get(tag.id);
+    if (existing) existing.count += 1;
+    else counts.set(tag.id, { label: tag.label, count: 1 });
+  }
+  return 1;
+}
+
+function sortedTagCounts(
+  counts: Map<string, { label: string; count: number }>,
+): TagCount[] {
+  return [...counts.entries()]
+    .map(([id, value]) => ({ id, label: value.label, count: value.count }))
+    .sort((a, b) => {
+      if (a.count !== b.count) return b.count - a.count;
+      return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
+    });
+}
+
 export function aggregate(
   events: SeizureEvent[],
   options: AggregateOptions,
@@ -200,7 +239,11 @@ export function aggregate(
   const dates = new Set<string>();
   const durationValues: number[] = [];
   const areaCounts: Record<AffectedArea, number> = { arms: 0, legs: 0, speech: 0 };
+  const triggerCounts = new Map<string, { label: string; count: number }>();
+  const auraCounts = new Map<string, { label: string; count: number }>();
   let areaAnswered = 0;
+  let triggerAnswered = 0;
+  let auraAnswered = 0;
   let rescueUsed = 0;
   let totalEvents = 0;
 
@@ -227,6 +270,9 @@ export function aggregate(
     } else if (event.affectedAreas.status !== 'not_recorded') {
       areaAnswered += 1;
     }
+
+    triggerAnswered += collectTagCounts(event.triggers, triggerCounts);
+    auraAnswered += collectTagCounts(event.aura, auraCounts);
   }
 
   return {
@@ -241,6 +287,10 @@ export function aggregate(
       medianDurationSeconds: median(durationValues),
       areaCounts,
       areaAnswered,
+      triggerTagCounts: sortedTagCounts(triggerCounts),
+      auraTagCounts: sortedTagCounts(auraCounts),
+      triggerAnswered,
+      auraAnswered,
     },
     dataVersion: options.dataVersion ?? 0,
   };
