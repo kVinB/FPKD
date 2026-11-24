@@ -161,6 +161,43 @@ describe('aggregation', () => {
     expect(areaSum).toBeGreaterThan(2);
   });
 
+  it('counts each tag once per event and reports answered tag entries', () => {
+    const stress = { id: 'trigger-stress', label: 'Stress' };
+    const poorSleep = { id: 'trigger-poor-sleep', label: 'Poor sleep' };
+    const custom = { id: '11111111-1111-4111-8111-111111111111', label: 'Synthetic custom' };
+    const smell = { id: 'aura-unusual-smell', label: 'Unusual smell' };
+    const eventsWithTags = [
+      dateOnlyEvent('2026-11-01', {
+        triggers: { status: 'reported', tags: [stress, poorSleep, custom, stress] },
+        aura: { status: 'reported', tags: [smell] },
+      }),
+      dateOnlyEvent('2026-11-01', {
+        triggers: { status: 'unknown' },
+        aura: { status: 'none_reported' },
+      }),
+      dateOnlyEvent('2026-10-31', {
+        triggers: { status: 'reported', tags: [stress] },
+      }),
+    ];
+    const result = aggregate(eventsWithTags, {
+      reportZone: 'UTC',
+      range: { start: '2026-11-01', end: '2026-11-01', granularity: 'day' },
+    });
+    expect(result.summary.totalEvents).toBe(2);
+    expect(result.summary.triggerTagCounts).toEqual([
+      { id: poorSleep.id, label: poorSleep.label, count: 1 },
+      { id: stress.id, label: stress.label, count: 1 },
+      { id: custom.id, label: custom.label, count: 1 },
+    ]);
+    expect(result.summary.auraTagCounts).toEqual([
+      { id: smell.id, label: smell.label, count: 1 },
+    ]);
+    expect(result.summary.triggerAnswered).toBe(2);
+    expect(result.summary.auraAnswered).toBe(2);
+    const tagSum = result.summary.triggerTagCounts.reduce((sum, tag) => sum + tag.count, 0);
+    expect(tagSum).toBeGreaterThan(result.summary.totalEvents);
+  });
+
   it('places date-only events on their recorded date even when report zone differs', () => {
     const dateOnly = dateOnlyEvent('2026-11-03', { zone: 'Pacific/Auckland' });
     const result = aggregate([dateOnly], {

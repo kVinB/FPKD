@@ -93,6 +93,10 @@ test('member journey: provision, change password, log event, analytics, PDF, iso
   await expect(page.getByText('Days with entries').first()).toBeVisible();
   await page.getByText('View data table').click();
   await expect(page.getByRole('table')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Tag breakdown (descriptive)' }),
+  ).toBeVisible();
+  await expect(page.getByText('Stress', { exact: true })).toBeVisible();
 
   await page.goto('/reports');
   await page.getByRole('button', { name: 'Generate preview' }).click();

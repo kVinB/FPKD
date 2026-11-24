@@ -52,7 +52,6 @@ async function seedRangeEvents(client: Awaited<ReturnType<TestContext['createCli
   });
   await client.json('POST', '/events', {
     body: eventBody('2026-11-01T12:00:00Z', {
-      triggeredAreas: undefined,
       affectedAreas: { status: 'reported', areas: ['speech', 'arms'] },
       duration: { status: 'unknown' },
       triggers: {
@@ -94,6 +93,10 @@ describe('A04 analytics and report agreement', () => {
         rescueUsed: number;
         durationsRecorded: number;
         medianDurationSeconds: number | null;
+        triggerTagCounts: { id: string; label: string; count: number }[];
+        auraTagCounts: { id: string; label: string; count: number }[];
+        triggerAnswered: number;
+        auraAnswered: number;
       };
       buckets: { key: string; count: number; partial: boolean }[];
     }>('POST', '/analytics/query', {
@@ -104,6 +107,18 @@ describe('A04 analytics and report agreement', () => {
     expect(analytics.summary.rescueUsed).toBe(1);
     expect(analytics.summary.durationsRecorded).toBe(2);
     expect(analytics.summary.medianDurationSeconds).toBe(90);
+    expect(analytics.summary.triggerTagCounts).toEqual([
+      { id: 'trigger-poor-sleep', label: 'Poor sleep', count: 1 },
+      { id: 'trigger-stress', label: 'Stress', count: 1 },
+    ]);
+    expect(analytics.summary.auraTagCounts).toEqual([]);
+    expect(analytics.summary.triggerAnswered).toBe(1);
+    expect(analytics.summary.auraAnswered).toBe(0);
+    const triggerTagSum = analytics.summary.triggerTagCounts.reduce(
+      (sum, tag) => sum + tag.count,
+      0,
+    );
+    expect(triggerTagSum).toBeGreaterThan(analytics.summary.triggerAnswered);
     expect(analytics.buckets).toHaveLength(7);
     expect(analytics.buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(4);
     const weekBucket = analytics.buckets.find((bucket) => bucket.key === '2026-11-01');
@@ -112,7 +127,11 @@ describe('A04 analytics and report agreement', () => {
 
     const report = await client.json<{
       model: {
-        summary: { totalEvents: number; medianDurationSeconds: number | null };
+        summary: {
+          totalEvents: number;
+          medianDurationSeconds: number | null;
+          triggerTagCounts: { id: string; label: string; count: number }[];
+        };
         buckets: { key: string; count: number }[];
         events: unknown[];
       };
@@ -123,6 +142,9 @@ describe('A04 analytics and report agreement', () => {
     });
     expect(report.model.summary.totalEvents).toBe(analytics.summary.totalEvents);
     expect(report.model.summary.medianDurationSeconds).toBe(90);
+    expect(report.model.summary.triggerTagCounts).toEqual(
+      analytics.summary.triggerTagCounts,
+    );
     expect(report.model.events).toHaveLength(4);
     expect(report.model.buckets.map((bucket) => bucket.count)).toEqual(
       analytics.buckets.map((bucket) => bucket.count),
