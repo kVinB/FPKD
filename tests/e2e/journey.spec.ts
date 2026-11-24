@@ -28,6 +28,8 @@ test('member journey: provision, change password, log event, analytics, PDF, iso
   const memberPassword = 'member-e2e-password-123';
 
   await loginAsAdmin(page);
+  await expect(page.getByText(/^Build /)).toBeVisible();
+  await expect(page.getByText(/^Build /)).toHaveCSS('text-align', 'right');
   const tempPassword = await createMemberViaUi(page, memberUsername, 'Synthetic Member');
   await logout(page);
 

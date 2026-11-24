@@ -13,7 +13,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    name: Resolve build version
+    runs-on: ubuntu-24.04
+    outputs:
+      build_version: ${{ steps.version.outputs.build_version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            version="$(node scripts/build-version.mjs)"
+          else
+            version="dev-${GITHUB_SHA::7}"
+          fi
+          printf 'build_version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'Build version: %s\n' "$version"
+
   verify:
+    needs: version
+    env:
+      BUILD_VERSION: ${{ needs.version.outputs.build_version }}
     name: Typecheck, tests, build, browser E2E
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -52,12 +77,15 @@ jobs:
 
   docker:
     name: Docker image and Compose smoke test
+    needs: version
+    env:
+      BUILD_VERSION: ${{ needs.version.outputs.build_version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - name: Build image
-        run: docker build -t seizure-diary:ci .
+        run: docker build --build-arg BUILD_VERSION="$BUILD_VERSION" -t seizure-diary:ci .
       - name: Verify the runtime user is non-root
         run: |
           docker run --rm --entrypoint id seizure-diary:ci | tee /tmp/id.txt
@@ -68,6 +96,7 @@ jobs:
           sed -i 's#^PUBLIC_ORIGIN=.*#PUBLIC_ORIGIN=http://127.0.0.1:3000#' deploy/.env
           sed -i 's#^SECURE_COOKIES=.*#SECURE_COOKIES=false#' deploy/.env
           sed -i "s#^CSRF_SECRET=.*#CSRF_SECRET=$(openssl rand -base64 32)#" deploy/.env
+          printf '\nBUILD_VERSION=%s\n' "$BUILD_VERSION" >> deploy/.env
       - name: Start Compose service
         run: docker compose -f deploy/docker-compose.yml up -d --build
       - name: Wait for health and smoke test
@@ -89,3 +118,42 @@ jobs:
       - name: Stop Compose service
         if: always()
         run: docker compose -f deploy/docker-compose.yml down -v
+
+  tag:
+    name: Tag successful main build
+    needs: [version, verify, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Create build tag
+        env:
+          VERSION: ${{ needs.version.outputs.build_version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$(git rev-parse HEAD)" != "$TARGET_SHA" ]; then
+            echo "main moved after this build; skipping stale tag"
+            exit 0
+          fi
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "tag $VERSION already exists"
+            exit 0
+          fi
+          git tag -a "$VERSION" -m "Seizure Diary build $VERSION" -m "Commit: $TARGET_SHA"
+          if ! git push origin "refs/tags/$VERSION"; then
+            git fetch --tags --force
+            if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+              echo "tag $VERSION created by another run"
+              exit 0
+            fi
+            exit 1
+          fi
+          echo "Tagged $VERSION"

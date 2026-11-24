@@ -1,6 +1,7 @@
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useAuth } from '../auth';
+import { BuildFooter } from './ui';
 
 const navItems = [
   { to: '/journal', label: 'Journal' },
@@ -31,7 +32,7 @@ export function Layout({ children }: { children: ReactNode }): JSX.Element {
   const editing = location.pathname === '/events/new' || location.pathname.endsWith('/edit');
 
   return (
-    <div className="min-h-screen bg-slatebg">
+    <div className="flex min-h-screen flex-col bg-slatebg">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2"
@@ -61,7 +62,7 @@ export function Layout({ children }: { children: ReactNode }): JSX.Element {
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-6xl gap-6 px-4 py-4">
+      <div className="mx-auto flex w-full max-w-6xl flex-1 gap-6 px-4 py-4">
         <aside className="hidden w-48 shrink-0 md:block">
           <nav aria-label="Main navigation" className="sticky top-20 space-y-1">
             {navItems.map((item) => (
@@ -74,10 +75,14 @@ export function Layout({ children }: { children: ReactNode }): JSX.Element {
           </nav>
         </aside>
 
-        <main id="main-content" className={`min-w-0 flex-1 ${editing ? 'pb-4' : 'pb-24 md:pb-8'}`}>
+        <main id="main-content" className="min-w-0 flex-1 pb-4">
           {children}
         </main>
       </div>
+
+      <BuildFooter
+        className={`mx-auto w-full max-w-6xl px-4 ${editing ? 'pb-4 md:pb-6' : 'pb-24 md:pb-6'}`}
+      />
 
       {!editing ? (
         <nav

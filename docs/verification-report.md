@@ -4,6 +4,11 @@ Base commit under test: **`6e665c6`** (dependency audit, 2026-11-24).
 Synthetic data only. This report records commands and observed outcomes; it is not a
 clinical, security-certification or performance guarantee.
 
+> Snapshot note: build-version footer and automatic `YYYYMMDD.VV` tagging were added
+> after this snapshot (see README "Build versions and release tags"). The local suite
+> after that change is 110 tests; the evidence below remains the recorded
+> benchmark/browser snapshot for the listed commit.
+
 ## Environment
 
 | Item | Value |
