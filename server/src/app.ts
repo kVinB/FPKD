@@ -63,7 +63,6 @@ export async function buildApp(config: Config, deps: AppDependencies): Promise<F
           },
     bodyLimit: 1024 * 1024,
     trustProxy: config.trustedProxies,
-    disableRequestLogging: false,
   });
 
   await app.register(cookie);

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Private family seizure diary (Seizure Diary / FPKD)",
   "engines": {
-    "node": ">=20.10 <23"
+    "node": ">=22.12 <23"
   },
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
@@ -29,47 +29,48 @@
     "db:backup": "tsx server/src/cli.ts backup",
     "bench": "tsx scripts/benchmark.ts",
     "e2e:all": "npm run build && E2E_BROWSERS=all playwright test",
-    "e2e:perf": "npm run build && PERF=1 playwright test tests/e2e/perf.spec.ts --project=desktop-chromium"
+    "e2e:perf": "npm run build && PERF=1 playwright test tests/e2e/perf.spec.ts --project=desktop-chromium",
+    "audit": "npm audit --audit-level=high"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",
     "@fastify/rate-limit": "10.2.2",
-    "@fastify/static": "8.0.4",
+    "@fastify/static": "10.1.12",
     "@js-temporal/polyfill": "0.5.1",
     "@react-pdf/renderer": "3.4.4",
     "argon2": "0.41.1",
     "better-sqlite3": "11.10.0",
     "dotenv": "16.4.7",
-    "fastify": "5.2.1",
+    "fastify": "5.12.8",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-router-dom": "6.28.2",
-    "zod": "3.24.1"
+    "react-router-dom": "7.18.6",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.10.2",
-    "@playwright/test": "1.50.1",
+    "@axe-core/playwright": "4.10.2",
+    "@playwright/test": "1.65.1",
     "@types/better-sqlite3": "7.6.12",
     "@types/node": "22.13.1",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
-    "@typescript-eslint/eslint-plugin": "8.23.0",
-    "@typescript-eslint/parser": "8.23.0",
+    "@typescript-eslint/eslint-plugin": "8.74.0",
+    "@typescript-eslint/parser": "8.74.0",
     "@vitejs/plugin-react": "4.3.4",
     "autoprefixer": "10.4.20",
     "concurrently": "9.1.2",
-    "esbuild": "0.24.2",
-    "eslint": "9.20.0",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
     "globals": "15.14.0",
     "jsdom": "26.0.0",
-    "pdf-parse": "^1.1.1",
-    "postcss": "8.5.1",
+    "pdf-parse": "1.1.1",
+    "postcss": "8.5.33",
     "prettier": "3.4.2",
     "tailwindcss": "3.4.17",
-    "tsx": "4.19.2",
+    "tsx": "4.23.15",
     "typescript": "5.7.3",
-    "typescript-eslint": "8.23.0",
-    "vite": "6.1.0",
-    "vitest": "3.0.5"
+    "typescript-eslint": "8.74.0",
+    "vite": "6.4.6",
+    "vitest": "5.1.1"
   }
 }

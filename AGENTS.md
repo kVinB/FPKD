@@ -28,6 +28,7 @@ SQLite on a private Proxmox guest. Read the v2.0 specification and
 
 ```sh
 npm ci
+npm run audit
 npm run typecheck
 npm run lint
 npm test                 # unit + real SQLite/API integration + deploy checks

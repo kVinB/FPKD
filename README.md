@@ -41,7 +41,7 @@ tests/    unit, real SQLite/API integration, Playwright e2e, deploy script check
 
 ## Quick start (development, synthetic data only)
 
-Requires Node.js 20.10–22 (tested on 22.23.5) and npm.
+Requires Node.js 22.12–22.x (tested on 22.23.5) and npm.
 
 ```sh
 npm ci
@@ -70,6 +70,7 @@ CSRF_SECRET="$(openssl rand -base64 32)" npm start
 | `npm start` | Run the production bundle |
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run lint` | ESLint |
+| `npm run audit` | Dependency audit (fails on high/critical) |
 | `npm test` | Unit + real SQLite/API integration + deploy script checks |
 | `npm run e2e` | Production build + Playwright (Chromium desktop/mobile, axe) |
 | `npm run e2e:all` | Same with Firefox, WebKit, iPhone emulation and 320 px profile |
@@ -133,8 +134,8 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, typecheck, lint, 106 unit/integration/deploy tests, production
-  build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
+- **verify**: `npm ci`, dependency audit, typecheck, lint, 106 unit/integration/deploy
+  tests, production build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
 - **docker**: non-root image build, Compose health/smoke test, private API `401` check,
@@ -150,19 +151,20 @@ reader/zoom, human PDF visual review, Proxmox/LAN/WireGuard, backup/restore dril
 Actual commands run in this workspace and outcomes:
 
 ```sh
+npm run audit                                  # 0 vulnerabilities
 npm run typecheck                              # passed
 npm run lint                                   # passed
 npm test                                       # 106 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
-npm run bench                                  # 10k events: p95 489.2 ms query+aggregate
+npm run bench                                  # 10k events: p95 468.1 ms query+aggregate
 PERF=1 npm run e2e:perf                        # 500-entry PDF: 7.9 s, 23 pages
 ```
 
 Benchmark numbers are from one warmed run on this machine, not a universal claim. The
-10,000-event 90-day query+aggregation p95 was **489.2 ms** (target 500 ms); report-model
-construction p95 was **1,960.6 ms**; the 500-entry PDF met the 10 s target at **7.9 s**
+10,000-event 90-day query+aggregation p95 was **468.1 ms** (target 500 ms); report-model
+construction p95 was **2,009.7 ms**; the 500-entry PDF met the 10 s target at **7.9 s**
 after compacting the PDF event layout.
 
 The browser suite boots the production bundle against a temp SQLite database and covers
@@ -274,7 +276,7 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
   [`docs/manual-acceptance.md`](./docs/manual-acceptance.md).
 - A12 has automated text/pagination/rendered-page checks; human visual sign-off remains
   (checklist included).
-- Performance numbers are from this workspace (10k p95 489.2 ms; 500-entry PDF 7.9 s)
+- Performance numbers are from this workspace (10k p95 468.1 ms; 500-entry PDF 7.9 s)
   and are not universal.
 - No clinical validation, E2EE, PDF/UA conformance, or regulatory compliance is claimed.
 
