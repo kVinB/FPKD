@@ -26,7 +26,10 @@
     "db:migrate": "tsx server/src/cli.ts migrate",
     "db:bootstrap-admin": "tsx server/src/cli.ts bootstrap-admin",
     "db:reset-password": "tsx server/src/cli.ts reset-password",
-    "db:backup": "tsx server/src/cli.ts backup"
+    "db:backup": "tsx server/src/cli.ts backup",
+    "bench": "tsx scripts/benchmark.ts",
+    "e2e:all": "npm run build && E2E_BROWSERS=all playwright test",
+    "e2e:perf": "npm run build && PERF=1 playwright test tests/e2e/perf.spec.ts --project=desktop-chromium"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",

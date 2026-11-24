@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { expect, test } from '@playwright/test';
 import {
   apiPost,
@@ -73,4 +75,26 @@ test('multipage PDF keeps selectable text, continuation labels and page numbers'
   expect(parsed.text).toContain('Synthetic long note for pagination testing');
   const occurrences = (parsed.text.match(/Bulk event 01/g) ?? []).length;
   expect(occurrences).toBe(1);
+
+  if (process.env.PDF_RENDER === '1') {
+    const prefix = testInfo.outputPath('page');
+    const render = spawnSync('pdftoppm', ['-png', '-r', '100', downloadPath as string, prefix], {
+      encoding: 'utf8',
+    });
+    expect(render.error, 'pdftoppm (poppler-utils) is required when PDF_RENDER=1').toBeUndefined();
+    expect(render.status, render.stderr).toBe(0);
+    const dir = path.dirname(prefix);
+    const base = path.basename(prefix);
+    const pages = fs
+      .readdirSync(dir)
+      .filter((file) => file.startsWith(`${base}-`) && file.endsWith('.png'))
+      .sort();
+    expect(pages).toHaveLength(parsed.numpages);
+    for (const file of pages) {
+      const full = path.join(dir, file);
+      const size = fs.statSync(full).size;
+      expect(size, `${file} should not be a blank page`).toBeGreaterThan(5000);
+      await testInfo.attach(file, { path: full, contentType: 'image/png' });
+    }
+  }
 });

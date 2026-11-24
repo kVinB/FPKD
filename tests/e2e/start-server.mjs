@@ -8,7 +8,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seizure-diary-e2e-'));
 const dbPath = path.join(dir, 'e2e.sqlite3');
 const env = {
   ...process.env,
-  NODE_ENV: 'production',
+  NODE_ENV: 'test',
   HOST: '127.0.0.1',
   PORT: '3100',
   PUBLIC_ORIGIN: 'http://127.0.0.1:3100',

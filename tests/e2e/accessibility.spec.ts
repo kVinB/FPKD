@@ -3,6 +3,10 @@ import AxeBuilder from '@axe-core/playwright';
 import { loginAsAdmin } from './helpers';
 
 async function seriousViolations(page: import('@playwright/test').Page) {
+  await page.addStyleTag({
+    content: '*, *::before, *::after { transition: none !important; animation: none !important; }',
+  });
+  await page.waitForTimeout(100);
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
     .analyze();
@@ -36,4 +40,13 @@ test('no critical or serious automated accessibility violations on core screens'
     violations,
     violations.map((violation) => `${violation.id}: ${violation.help}`).join('\n'),
   ).toEqual([]);
+
+  for (const path of ['/analytics', '/reports', '/settings', '/admin/accounts']) {
+    await page.goto(path);
+    violations = await seriousViolations(page);
+    expect(
+      violations,
+      `${path}\n${violations.map((violation) => `${violation.id}: ${violation.help}`).join('\n')}`,
+    ).toEqual([]);
+  }
 });

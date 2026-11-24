@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
@@ -17,13 +21,31 @@
     "verbatimModuleSyntax": true,
     "jsx": "react-jsx",
     "noEmit": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["shared/*"],
-      "@server/*": ["server/src/*"]
+      "@shared/*": [
+        "shared/*"
+      ],
+      "@server/*": [
+        "server/src/*"
+      ]
     }
   },
-  "include": ["shared/**/*.ts", "server/**/*.ts", "web/**/*.ts", "web/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"],
-  "exclude": ["node_modules", "dist", "web/dist"]
+  "include": [
+    "shared/**/*.ts",
+    "server/**/*.ts",
+    "web/**/*.ts",
+    "web/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "web/dist"
+  ]
 }

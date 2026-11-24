@@ -314,7 +314,7 @@ export function AnalyticsPage(): JSX.Element {
             <EmptyState title="No buckets in this range" />
           ) : (
             <>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Scrollable chart">
                 <svg
                   viewBox="0 0 720 260"
                   role="img"
@@ -403,7 +403,7 @@ export function AnalyticsPage(): JSX.Element {
 
               <details>
                 <summary className="cursor-pointer font-semibold">View data table</summary>
-                <div className="mt-3 overflow-x-auto">
+                <div className="mt-3 overflow-x-auto" tabIndex={0} role="region" aria-label="Scrollable data table">
                   <table className="w-full text-left text-sm">
                     <caption className="sr-only">
                       Logged events per {data.range.granularity} bucket
