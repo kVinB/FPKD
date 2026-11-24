@@ -241,8 +241,10 @@ a live database.
 - This installer was **not executed against a real Proxmox host** in this workspace.
   Shell syntax, help output, and mocked `pct`/`pveam`/`pvesm` provisioning paths
   (dry-run/no mutation, CTID conflict, storage/bridge/static-IP validation, no
-  `pct destroy`) plus the app's deployment files are tested; real `pct`/`pveam`
-  provisioning remains a deployment acceptance check.
+  `pct destroy`) plus updater transaction paths (no-change, divergence, failed build,
+  failed backup, failed migration, failed health check, lock contention) and the app's
+  deployment files are tested; real `pct`/`pveam` provisioning remains a deployment
+  acceptance check.
 - Do not use a privileged container, Docker nesting, or public exposure to work around
   local test problems.
 - Debian/Proxmox package upgrades and firewall changes are separate lifecycles; the
