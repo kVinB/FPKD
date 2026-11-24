@@ -432,6 +432,104 @@ describe('A09 retries, duplicates and dataset epoch', () => {
     expect(response.statusCode).toBe(409);
     expect((response.json() as { error: { code: string } }).error.code).toBe('stale_dataset');
   });
+
+  it('returns 503 and rolls back partial tag writes when SQLite aborts an insert', async () => {
+    context = await createTestContext();
+    await context.seedUser({ username: 'writefail-user', password: 'writefail-password-123' });
+    const client = context.createClient();
+    await client.login('writefail-user', 'writefail-password-123');
+    const customTagId = '11111111-1111-4111-8111-111111111111';
+    const payload = basePayload({
+      triggers: {
+        status: 'reported',
+        tags: [{ id: customTagId, label: 'Rollback tag' }],
+      },
+      eventLabel: 'Should not persist',
+    });
+
+    context.db.exec(`
+      CREATE TRIGGER inject_write_failure
+      BEFORE INSERT ON events
+      BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;
+    `);
+    try {
+      const response = await client.request('POST', '/events', {
+        body: payload,
+        csrf: client.sessionCsrf,
+      });
+      expect(response.statusCode).toBe(503);
+      expect((response.json() as { error: { code: string } }).error.code).toBe(
+        'storage_unavailable',
+      );
+      const events = context.db
+        .prepare('SELECT COUNT(*) AS count FROM events')
+        .get() as { count: number };
+      expect(events.count).toBe(0);
+      const tag = context.db
+        .prepare('SELECT COUNT(*) AS count FROM tags WHERE tag_id = ?')
+        .get(customTagId) as { count: number };
+      expect(tag.count).toBe(0);
+    } finally {
+      context.db.exec('DROP TRIGGER IF EXISTS inject_write_failure');
+    }
+
+    const retry = await client.json<{ created: boolean }>('POST', '/events', {
+      body: payload,
+      csrf: client.sessionCsrf,
+    });
+    expect(retry.created).toBe(true);
+    const query = await client.json<{ total: number }>('POST', '/events/query', {
+      body: { page: 1 },
+      csrf: client.sessionCsrf,
+    });
+    expect(query.total).toBe(1);
+  });
+
+  it('returns 503 and preserves the previous revision when SQLite aborts an update', async () => {
+    context = await createTestContext();
+    await context.seedUser({ username: 'updatefail-user', password: 'updatefail-password-123' });
+    const client = context.createClient();
+    await client.login('updatefail-user', 'updatefail-password-123');
+    const created = await client.json<{ event: { id: string } }>('POST', '/events', {
+      body: basePayload({ eventLabel: 'Original label' }),
+      csrf: client.sessionCsrf,
+    });
+
+    context.db.exec(`
+      CREATE TRIGGER inject_update_failure
+      BEFORE UPDATE ON events
+      BEGIN SELECT RAISE(ABORT, 'injected update failure'); END;
+    `);
+    try {
+      const response = await client.request('PUT', `/events/${created.event.id}`, {
+        body: basePayload({ eventLabel: 'Changed label', expectedRevision: 1 }),
+        csrf: client.sessionCsrf,
+      });
+      expect(response.statusCode).toBe(503);
+      expect((response.json() as { error: { code: string } }).error.code).toBe(
+        'storage_unavailable',
+      );
+      const unchanged = await client.json<{ event: { revision: number; eventLabel: string } }>(
+        'GET',
+        `/events/${created.event.id}`,
+      );
+      expect(unchanged.event.revision).toBe(1);
+      expect(unchanged.event.eventLabel).toBe('Original label');
+    } finally {
+      context.db.exec('DROP TRIGGER IF EXISTS inject_update_failure');
+    }
+
+    const retry = await client.json<{ event: { revision: number; eventLabel: string } }>(
+      'PUT',
+      `/events/${created.event.id}`,
+      {
+        body: basePayload({ eventLabel: 'Changed label', expectedRevision: 1 }),
+        csrf: client.sessionCsrf,
+      },
+    );
+    expect(retry.event.revision).toBe(2);
+    expect(retry.event.eventLabel).toBe('Changed label');
+  });
 });
 
 describe('A14 owner isolation', () => {

@@ -132,7 +132,7 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, typecheck, lint, 89 unit/integration/deploy tests, production
+- **verify**: `npm ci`, typecheck, lint, 91 unit/integration/deploy tests, production
   build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
@@ -146,10 +146,10 @@ Actual commands run in this workspace and outcomes:
 ```sh
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 89 passed
+npm test                                       # 91 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
-npm run e2e                                    # 5 passed, 1 skipped (Chromium)
-E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 14 passed, 16 skipped (per-project gating)
+npm run e2e                                    # 7 passed, 5 skipped (Chromium)
+E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
 npm run bench                                  # 10k events: p95 489.2 ms query+aggregate
 PERF=1 npm run e2e:perf                        # 500-entry PDF: 7.9 s, 23 pages
 ```
@@ -171,6 +171,10 @@ real device):
   affected areas/label and asserted absent for notes/name;
 - admin's own journal remains empty (app-level isolation);
 - no cross-origin network requests;
+- offline/connection-loss draft retention and retry without duplicates across all
+  browser/viewport profiles;
+- injected SQLite insert/update failures return `503`, roll back partial tags and
+  preserve the prior revision;
 - multipage PDF (40 events, long notes) with searchable text, continuation labels and
   page numbers, plus rendered-page PNGs and blank-page guards when `PDF_RENDER=1`;
 - 320 px layout with no horizontal page scroll and ≥44 px interactive controls;
@@ -188,8 +192,8 @@ real device):
 | A05 | Verified | Unit/integration distinct statuses, Used-without-details, median denominator excluding unknown/blank, report rendering. |
 | A06 | Verified | Integration privacy projection and stale-preview `409`; e2e PDF text excludes name/notes by default. |
 | A07 | Verified | Integration export/import round-trip, malformed/unsupported/duplicate/stale rejection, v1 conversion, clear-all. |
-| A08 | Partially verified | Service restart persistence verified; in-memory draft after connectivity loss is implemented but not automated. |
-| A09 | Partially verified | Stable-ID retry, concurrent double submit, revision conflicts, stale epoch verified. **Injected SQLite write failure not simulated.** |
+| A08 | Verified | Service restart persistence, plus Playwright connection-loss draft retention and retry without duplicates across Chromium/Firefox/WebKit mobile/desktop/320 px. |
+| A09 | Verified | Stable-ID retry, concurrent double submit, revision/epoch conflicts, plus injected SQLite insert/update failures returning `503` with rollback and prior revision preserved. |
 | A10 | Verified | Headers/CSP/no-store, CSRF, origin, hostile text and no third-party requests verified in Chromium, Firefox and WebKit; production build under test. |
 | A11 | Partially verified | Axe reports no serious/critical WCAG 2.2 A/AA violations on 7 screens across 6 browser/viewport profiles. **No manual VoiceOver/NVDA or zoomed-layout pass.** |
 | A12 | Partially verified | Text extracted from single/multipage PDFs; continuation labels/page numbers and rendered-page blank/clip guards verified. **Human visual sign-off remains.** |
@@ -252,8 +256,6 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
 - A11 has automated axe coverage but still lacks manual screen-reader (VoiceOver/NVDA)
   and zoomed-layout acceptance.
 - A12 has automated text/pagination/rendered-page checks; human visual sign-off remains.
-- A08 offline-draft behavior and A09 injected SQLite-write failure are implemented but
-  not automated.
 - Performance numbers are from this workspace (10k p95 489.2 ms; 500-entry PDF 7.9 s)
   and are not universal.
 - No clinical validation, E2EE, PDF/UA conformance, or regulatory compliance is claimed.
