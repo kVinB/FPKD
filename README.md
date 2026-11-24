@@ -132,9 +132,11 @@ Build tags use the UTC date and a two-digit build number: `YYYYMMDD.VV`, for exa
 - Docker accepts `--build-arg BUILD_VERSION=...`; CI passes the resolved tag. A native
   build on a tagged commit uses that tag, otherwise it computes the next one for the date.
 - Tags are immutable. Do not move, delete or reuse a tag. CI creates the tag and then
-  publishes a GitHub Release containing `seizure-diary-<tag>.tar.gz` plus a SHA-256
-  checksum. Proxmox installs/updates download that runner-built bundle; no Git clone or
-  application build occurs on the Proxmox host/guest.
+  publishes a GitHub Release containing the app bundle
+  (`seizure-diary-<tag>.tar.gz`), its SHA-256 checksum, and a self-contained
+  `seizure-diary-installer-<tag>.sh` + checksum. Proxmox installs/updates download that
+  runner-built bundle; no Git clone or application build occurs on the Proxmox
+  host/guest.
 
 ## Security and privacy boundary
 
@@ -155,14 +157,15 @@ Build tags use the UTC date and a two-digit build number: `YYYYMMDD.VV`, for exa
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, dependency audit, typecheck, lint, 114 unit/integration/deploy
+- **verify**: `npm ci`, dependency audit, typecheck, lint, 116 unit/integration/deploy
   tests, production build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
 - **docker**: non-root image build, Compose health/smoke test, private API `401` check,
   and teardown. Docker is verified in CI only (the local workspace has no Docker).
 - **release**: on successful `main` pushes, build a Debian 12 deployment bundle in
-  Docker and publish it as a GitHub Release asset for the auto-created tag.
+  Docker, generate the self-contained installer, and publish both plus checksums to the
+  GitHub Release for the auto-created tag.
 - **Benchmark** (manual `workflow_dispatch`): 10,000-event analytics and 500-entry PDF
   timing.
 
@@ -178,7 +181,7 @@ Actual commands run in this workspace and outcomes:
 npm run audit                                  # 0 vulnerabilities
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 114 passed
+npm test                                       # 116 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)
@@ -249,18 +252,21 @@ Full details: [`deploy/proxmox/README.md`](./deploy/proxmox/README.md).
    SQLite on SMB/NFS. The service uses `/var/lib/seizure-diary` and
    `/var/backups/seizure-diary`; releases live under `/opt/seizure-diary`.
 2. **Runner-built releases**: every successful push to `main` creates a
-   `YYYYMMDD.VV` tag and publishes `seizure-diary-<tag>.tar.gz` plus its SHA-256
-   checksum on the GitHub Release. Builts happen in Debian 12 on GitHub Actions; the
-   guest installs only runtime prerequisites.
+   `YYYYMMDD.VV` tag and publishes the app bundle, its SHA-256 checksum, and a
+   self-contained installer asset on the GitHub Release. Builds happen in Debian 12 on
+   GitHub Actions; the guest installs only runtime prerequisites.
 3. **Read-only GitHub token**: for a private repo, create a fine-grained token scoped to
-   the repository with **Contents: read**, store it in a 0600 host file, and pass
-   `--token-file`. The guest stores it as `0400 root`; rotate/revoke it on compromise.
-4. **Install (VM default)**: review this repo on the Proxmox host, then run
-   `sudo ./deploy/proxmox/install.sh --dry-run --type vm ...` followed by the real
-   command. VM installs require an images-capable storage, a static IP/gateway and an
-   SSH private key; the official Debian 12 cloud image is SHA-512 verified.
-5. **Install (LXC)**: add `--type lxc` with rootdir/vztmpl storage. The installer creates
-   an unprivileged container and validates storage/bridge/ID.
+   the repository with **Contents: read**. The guided installer can prompt for it with
+   hidden input and save it as `0600` on the host; the guest stores it as `0400 root`.
+   Rotate/revoke it on compromise.
+4. **Copy/paste install**: open the private GitHub Release, copy
+   `seizure-diary-installer-<tag>.sh` to `/root/seizure-diary-install.sh` on the Proxmox
+   host, then run `sudo bash /root/seizure-diary-install.sh`. It prompts for LXC (default)
+   or VM, Proxmox storage IDs, template storage, bridge, network, release and token.
+5. **Flag-driven install**: copy `deploy/proxmox` and run `install.sh` with
+   `--dry-run` first. LXC is the default; VM installs require an images-capable storage,
+   a static IP/gateway and an SSH private key, with the Debian cloud image SHA-512
+   verified.
 6. **Bootstrap**: run `pct exec <CTID> -- /usr/local/bin/seizure-diary bootstrap-admin
    --username <admin>` for LXC, or the equivalent over SSH with `sudo` for a VM. Use the
    hidden prompt; no default credentials exist.
@@ -307,6 +313,9 @@ remains unverified. Do not use Docker nesting in LXC; use the native LXC path or
 - The GitHub Release bundle job and token-based asset download were validated on `main`
   (`20261124.03`); the guest-local `0400` token file and real VM/LXC boot remain operator
   acceptance checks.
+- The self-contained installer asset and mocked interactive storage prompts are covered
+  by tests; the first real installer asset/download and PVE prompt run occur on the next
+  `main` build after merge.
 - Docker is built/smoke-tested in CI only; local Docker execution is unverified.
 - Real iPhone Safari and real devices are not verified; WebKit coverage is emulation.
 - A11 has automated axe coverage but still lacks the manual screen-reader/zoom pass in

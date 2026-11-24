@@ -7,7 +7,7 @@ clinical, security-certification or performance guarantee.
 > Snapshot note: build-version footer, automatic `YYYYMMDD.VV` tags, the runner-built
 > GitHub Release bundle, and the Debian VM/LXC artifact installer were added after this
 > snapshot (see README and `deploy/proxmox/README.md`). The local suite after those
-> changes is 114 tests; the evidence below remains the recorded benchmark/browser
+> changes is 116 tests; the evidence below remains the recorded benchmark/browser
 > snapshot for the listed commit.
 
 ## Post-snapshot runner-built release verification (2026-11-24)
@@ -36,6 +36,10 @@ extracted the bundle, and the bundle contained `dist/server/index.js`,
 `dist/web/index.html`, `node_modules/`, `package.json`, `package-lock.json` and
 `deploy/`. This validates the private-repository API/asset path with a repository
 token, but not a real guest's `0400` token file or Proxmox VM/LXC boot.
+
+The self-contained installer asset and guided LXC storage/token prompts were added after
+this `20261124.03` snapshot. Their generator and mocked interactive flows are covered by
+local tests; the first real installer asset is published on the next `main` build.
 
 ## Environment
 

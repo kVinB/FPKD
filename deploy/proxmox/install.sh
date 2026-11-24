@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUEST_SCRIPT="$SCRIPT_DIR/install-guest.sh"
 RELEASE_TOOL="$SCRIPT_DIR/release.mjs"
 
-GUEST_TYPE="vm"
+GUEST_TYPE="lxc"
 CTID=""
 HOSTNAME="seizure-diary"
 TEMPLATE=""
@@ -32,6 +32,7 @@ VERSION="latest"
 TOKEN_FILE=""
 ASSUME_YES="0"
 DRY_RUN="0"
+INTERACTIVE="auto"
 
 die() {
   printf 'install.sh: %s\n' "$*" >&2
@@ -42,6 +43,279 @@ log() {
   printf '[install] %s\n' "$*"
 }
 
+UI_TITLE="Seizure Diary"
+UI_WHIPTAIL="${WHIPTAIL:-whiptail}"
+
+ui_available() {
+  if [ "${SEIZURE_DIARY_FORCE_UI:-0}" = "1" ]; then
+    command -v "$UI_WHIPTAIL" >/dev/null 2>&1
+  else
+    [ -t 0 ] && [ -t 1 ] && command -v "$UI_WHIPTAIL" >/dev/null 2>&1
+  fi
+}
+
+ui_menu() {
+  local title="$1" prompt="$2" default="$3"
+  shift 3
+  local pairs=("$@")
+  local count=$(( ${#pairs[@]} / 2 ))
+  if [ "$count" -eq 0 ]; then
+    die "no choices are available for: $title"
+  fi
+  if ui_available; then
+    local list_height=$(( count < 10 ? count : 12 ))
+    local height=$(( list_height + 8 ))
+    local args=(--title "$UI_TITLE - $title")
+    [ -n "$default" ] && args+=(--default-item "$default")
+    args+=(--menu "$prompt" "$height" 82 "$list_height")
+    local choice
+    if ! choice="$("$UI_WHIPTAIL" --clear "${args[@]}" "${pairs[@]}" 3>&1 1>&2 2>&3)"; then
+      return 1
+    fi
+    printf '%s' "$choice"
+    return 0
+  fi
+  printf '\n%s\n%s\n' "$title" "$prompt" >&2
+  local index=1
+  local i
+  for ((i = 0; i < ${#pairs[@]}; i += 2)); do
+    printf '  %d) %s — %s\n' "$index" "${pairs[i]}" "${pairs[i + 1]}" >&2
+    index=$((index + 1))
+  done
+  local attempt answer chosen
+  for attempt in 1 2 3 4 5; do
+    printf 'Choice [%s]: ' "$default" >&2
+    read -r answer
+    answer="${answer:-$default}"
+    if [[ "$answer" =~ ^[0-9]+$ ]] && [ "$answer" -ge 1 ] && [ "$answer" -le "$count" ]; then
+      chosen="${pairs[$(( (answer - 1) * 2 ))]}"
+      printf '%s' "$chosen"
+      return 0
+    fi
+    for ((i = 0; i < ${#pairs[@]}; i += 2)); do
+      if [ "$answer" = "${pairs[i]}" ]; then
+        printf '%s' "$answer"
+        return 0
+      fi
+    done
+    printf 'Invalid choice. Try again.\n' >&2
+  done
+  return 1
+}
+
+ui_input() {
+  local title="$1" prompt="$2" default="$3"
+  if ui_available; then
+    local value
+    if ! value="$("$UI_WHIPTAIL" --clear --title "$UI_TITLE - $title" \
+      --inputbox "$prompt" 10 82 "$default" 3>&1 1>&2 2>&3)"; then
+      return 1
+    fi
+    printf '%s' "$value"
+    return 0
+  fi
+  local answer
+  printf '%s [%s]: ' "$prompt" "$default" >&2
+  read -r answer
+  printf '%s' "${answer:-$default}"
+}
+
+ui_password() {
+  local title="$1" prompt="$2"
+  if ui_available; then
+    local value
+    if ! value="$("$UI_WHIPTAIL" --clear --title "$UI_TITLE - $title" \
+      --passwordbox "$prompt" 10 82 3>&1 1>&2 2>&3)"; then
+      return 1
+    fi
+    printf '%s' "$value"
+    return 0
+  fi
+  local value
+  printf '%s: ' "$prompt" >&2
+  read -r -s value
+  printf '\n' >&2
+  printf '%s' "$value"
+}
+
+ui_yesno() {
+  local title="$1" prompt="$2" default="${3:-yes}"
+  if ui_available; then
+    local args=(--clear --title "$UI_TITLE - $title" --yesno "$prompt" 12 82)
+    [ "$default" = "no" ] && args=(--clear --title "$UI_TITLE - $title" --defaultno --yesno "$prompt" 12 82)
+    "$UI_WHIPTAIL" "${args[@]}" 3>&1 1>&2 2>&3
+    return $?
+  fi
+  local answer
+  local suffix="[Y/n]"
+  [ "$default" = "no" ] && suffix="[y/N]"
+  printf '%s %s: ' "$prompt" "$suffix" >&2
+  read -r answer
+  answer="${answer:-$default}"
+  case "$answer" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ui_message() {
+  local title="$1" prompt="$2"
+  if ui_available; then
+    "$UI_WHIPTAIL" --clear --title "$UI_TITLE - $title" --msgbox "$prompt" 16 82 3>&1 1>&2 2>&3 || true
+  else
+    printf '\n%s\n%s\n' "$title" "$prompt" >&2
+    printf 'Press Enter to continue…' >&2
+    read -r _ || true
+  fi
+}
+
+next_free_id() {
+  local candidate
+  for candidate in $(seq 200 299); do
+    if [ "$GUEST_TYPE" = "vm" ]; then
+      qm status "$candidate" >/dev/null 2>&1 || { printf '%s' "$candidate"; return; }
+    else
+      pct status "$candidate" >/dev/null 2>&1 || { printf '%s' "$candidate"; return; }
+    fi
+  done
+  return 1
+}
+
+storage_menu() {
+  local content="$1" title="$2" current="$3"
+  local rows=()
+  mapfile -t rows < <(pvesm status -content "$content" 2>/dev/null | awk 'NR>1 && $3=="active" {print $1"|"$2"|"$6}')
+  if [ "${#rows[@]}" -eq 0 ]; then
+    die "no active storage supports $content; configure storage first"
+  fi
+  local pairs=()
+  local row id type avail
+  for row in "${rows[@]}"; do
+    IFS='|' read -r id type avail <<< "$row"
+    pairs+=("$id" "$type · free $avail")
+  done
+  local default="$current"
+  if [ -z "$default" ]; then default="${pairs[0]}"; fi
+  ui_menu "$title" "Select the Proxmox storage ID (not a physical disk)." "$default" "${pairs[@]}"
+}
+
+template_menu() {
+  local current="$1"
+  local pairs=(__download__ "Download latest Debian 12 template")
+  local row volid
+  mapfile -t rows < <(pveam list "$TEMPLATE_STORAGE" 2>/dev/null | awk '{print $1}' | grep '/debian-12-standard/' | sort -V)
+  for row in "${rows[@]}"; do
+    [ -n "$row" ] || continue
+    pairs+=("$row" "Use $row")
+  done
+  local default="__download__"
+  if [ -n "$current" ]; then default="$current"; fi
+  ui_menu "Debian template" "Choose a downloaded template or download the latest official Debian 12 template." "$default" "${pairs[@]}"
+}
+
+interactive_collect() {
+  REPO="$(ui_input "GitHub repository" "Repository (owner/name)" "$REPO")" || die "cancelled"
+  local release_choice
+  release_choice="$(ui_menu "Release" "Install the latest runner-built release or a specific tag." "latest" \
+    latest "Latest release" specific "Specific YYYYMMDD.VV tag")" || die "cancelled"
+  if [ "$release_choice" = "specific" ]; then
+    local version_default="$VERSION"
+    [ "$version_default" = "latest" ] && version_default=""
+    VERSION="$(ui_input "Release tag" "Enter a release tag (YYYYMMDD.VV)" "$version_default")" || die "cancelled"
+  else
+    VERSION="latest"
+  fi
+
+  local token_default="paste" token_pairs=(paste "Paste a read-only GitHub token (hidden)")
+  local host_token="/root/seizure-diary-github-token"
+  if [ -n "$TOKEN_FILE" ] && [ -r "$TOKEN_FILE" ]; then
+    token_pairs=(configured "Use --token-file $TOKEN_FILE" "${token_pairs[@]}")
+    token_default="configured"
+  elif [ -r "$host_token" ]; then
+    token_pairs=(existing "Use existing $host_token" "${token_pairs[@]}")
+    token_default="existing"
+  fi
+  token_pairs+=(public "Public repository (no token)")
+  local token_choice
+  token_choice="$(ui_menu "GitHub access" "Choose how to download the private release bundle." "$token_default" "${token_pairs[@]}")" || die "cancelled"
+  case "$token_choice" in
+    configured) ;;
+    existing) TOKEN_FILE="$host_token" ;;
+    paste)
+      local secret
+      secret="$(ui_password "GitHub token" "Paste a fine-grained token with Contents: read. Input is hidden and saved on this host as 0600.")" || die "cancelled"
+      [ -n "$secret" ] || die "empty GitHub token"
+      umask 077
+      printf '%s' "$secret" > "$host_token"
+      chmod 0600 "$host_token"
+      unset secret
+      TOKEN_FILE="$host_token"
+      ;;
+    public) TOKEN_FILE="" ;;
+    *) die "unknown token choice" ;;
+  esac
+
+  HOSTNAME="$(ui_input "Hostname" "Guest hostname" "$HOSTNAME")" || die "cancelled"
+  if [ -z "$CTID" ]; then
+    CTID="$(next_free_id)" || die "no free guest ID found in 200-299"
+  fi
+  CTID="$(ui_input "Guest ID" "VMID/CTID (must be unused)" "$CTID")" || die "cancelled"
+  CORES="$(ui_input "CPU" "vCPUs" "$CORES")" || die "cancelled"
+  MEMORY="$(ui_input "RAM" "Memory in MiB" "$MEMORY")" || die "cancelled"
+  DISK="$(ui_input "Disk" "Disk size in GiB" "$DISK")" || die "cancelled"
+
+  local bridges=()
+  mapfile -t bridges < <(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | sort -u)
+  if [ "${#bridges[@]}" -eq 0 ]; then
+    BRIDGE="$(ui_input "Bridge" "Network bridge" "${BRIDGE:-vmbr0}")" || die "cancelled"
+  else
+    local bridge_pairs=()
+    local bridge
+    for bridge in "${bridges[@]}"; do
+      [ -n "$bridge" ] && bridge_pairs+=("$bridge" "Bridge $bridge")
+    done
+    local bridge_default="$BRIDGE"
+    if [ -z "$bridge_default" ] || ! printf '%s\n' "${bridges[@]}" | grep -qx "$bridge_default"; then
+      bridge_default="${bridges[0]}"
+    fi
+    BRIDGE="$(ui_menu "Bridge" "Select the network bridge." "$bridge_default" "${bridge_pairs[@]}")" || die "cancelled"
+  fi
+
+  if [ "$GUEST_TYPE" = "lxc" ]; then
+    if ui_yesno "Network" "Use DHCP for the container? Choose No to enter a static address." "yes"; then
+      IP_CIDR=""
+      GATEWAY=""
+    else
+      IP_CIDR="$(ui_input "Network" "Static IPv4/prefix, e.g. 10.20.0.10/24" "$IP_CIDR")" || die "cancelled"
+      GATEWAY="$(ui_input "Network" "Gateway IPv4 address" "$GATEWAY")" || die "cancelled"
+    fi
+  else
+    IP_CIDR="$(ui_input "Network" "Static IPv4/prefix, e.g. 10.20.0.10/24" "$IP_CIDR")" || die "cancelled"
+    GATEWAY="$(ui_input "Network" "Gateway IPv4 address" "$GATEWAY")" || die "cancelled"
+  fi
+  DNS="$(ui_input "DNS" "Comma-separated DNS servers (blank for provider/default)" "$DNS")" || die "cancelled"
+  VLAN="$(ui_input "VLAN" "Optional VLAN tag 1-4094 (blank for none)" "$VLAN")" || die "cancelled"
+
+  if [ "$GUEST_TYPE" = "lxc" ]; then
+    ROOTFS_STORAGE="$(storage_menu rootdir "Container disk storage" "$ROOTFS_STORAGE")" || die "cancelled"
+    TEMPLATE_STORAGE="$(storage_menu vztmpl "Template storage" "$TEMPLATE_STORAGE")" || die "cancelled"
+    local template_choice
+    template_choice="$(template_menu "$TEMPLATE")" || die "cancelled"
+    if [ "$template_choice" = "__download__" ]; then
+      TEMPLATE=""
+    else
+      TEMPLATE="$template_choice"
+    fi
+  else
+    VM_STORAGE="$(storage_menu images "VM disk storage" "$VM_STORAGE")" || die "cancelled"
+    IMAGE_DIR="$(ui_input "Cloud image cache" "Directory for the Debian cloud image" "$IMAGE_DIR")" || die "cancelled"
+    SSH_PRIVATE_KEY="$(ui_input "SSH key" "Host path to the SSH private key used for VM bootstrap" "$SSH_PRIVATE_KEY")" || die "cancelled"
+    VM_USER="$(ui_input "VM user" "Cloud-init user" "$VM_USER")" || die "cancelled"
+  fi
+
+  ui_message "Ready" "Seizure Diary will now create a $GUEST_TYPE guest using storage $([ "$GUEST_TYPE" = lxc ] && printf '%s' "$ROOTFS_STORAGE" || printf '%s' "$VM_STORAGE"). The app release is downloaded from GitHub; nothing is built on Proxmox."
+}
+
 usage() {
   cat <<'USAGE'
 Usage: sudo ./deploy/proxmox/install.sh [options]
@@ -50,8 +324,8 @@ Creates a dedicated Debian guest on Proxmox VE, downloads a runner-built,
 checksum-verified release bundle from GitHub, and starts it under systemd.
 
 Guest type:
-  --type <vm|lxc>             vm = QEMU Debian cloud-image VM (default)
-                              lxc = unprivileged Debian 12 LXC
+  --type <vm|lxc>             lxc = unprivileged Debian 12 LXC (default)
+                              vm = QEMU Debian cloud-image VM
 
 Identity and source:
   --ctid <id>                 VMID/CTID (default: next free from 200)
@@ -87,6 +361,8 @@ Resources:
 Other:
   --yes                       Do not prompt for final confirmation
   --dry-run                   Validate and print the summary; make no changes and download nothing
+  --interactive               Force the guided prompts (LXC is the default)
+  --non-interactive           Never prompt; use flags/defaults or fail on ambiguity
   -h, --help                  Show this help
 USAGE
 }
@@ -120,13 +396,21 @@ while [ "$#" -gt 0 ]; do
     --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
     --yes) ASSUME_YES="1"; shift ;;
     --dry-run) DRY_RUN="1"; shift ;;
+    --interactive) INTERACTIVE="1"; shift ;;
+    --non-interactive) INTERACTIVE="0"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
 
 [ "$(id -u)" -eq 0 ] || die "run as root on the Proxmox VE host"
+if [ "$INTERACTIVE" = "auto" ]; then
+  if [ -t 0 ] && [ -t 1 ] && [ "$ASSUME_YES" != "1" ]; then INTERACTIVE="1"; else INTERACTIVE="0"; fi
+fi
 command -v pvesm >/dev/null 2>&1 || die "pvesm is not available; is this a Proxmox VE host?"
+if [ "$INTERACTIVE" = "1" ]; then
+  GUEST_TYPE="$(ui_menu "Guest type" "Choose the Debian guest type. LXC is recommended for this app." "$GUEST_TYPE"     lxc "LXC Container (recommended)" vm "QEMU VM")" || die "cancelled"
+fi
 case "$GUEST_TYPE" in
   vm)
     command -v qm >/dev/null 2>&1 || die "qm is not available; install/update Proxmox VE"
@@ -146,6 +430,9 @@ case "$GUEST_TYPE" in
     ;;
 esac
 [ -r "$RELEASE_TOOL" ] || die "release tool not found: $RELEASE_TOOL"
+if [ "$INTERACTIVE" = "1" ]; then
+  interactive_collect
+fi
 [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--repo must be owner/name"
 if [ "$VERSION" != "latest" ] && [[ ! "$VERSION" =~ ^[0-9]{8}\.[0-9]{2}$ ]]; then
   die "--version must be latest or YYYYMMDD.VV"
@@ -319,9 +606,14 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$ASSUME_YES" != "1" ]; then
-  printf '\nType "install" to create the guest: '
-  read -r answer
-  [ "$answer" = "install" ] || die "aborted by operator"
+  if [ "$INTERACTIVE" = "1" ] && ui_available; then
+    ui_yesno "Install" "Create the $GUEST_TYPE guest and install the runner-built release now?" "yes" ||
+      die "aborted by operator"
+  else
+    printf '\nType "install" to create the guest: '
+    read -r answer
+    [ "$answer" = "install" ] || die "aborted by operator"
+  fi
 fi
 
 run_guest_installer_lxc() {

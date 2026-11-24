@@ -10,6 +10,7 @@ const scripts = [
   'deploy/proxmox/seizure-diary',
   'deploy/proxmox/update.sh',
   'deploy/proxmox/release.mjs',
+  'scripts/package-installer.mjs',
 ];
 
 describe('shell entry points', () => {
@@ -85,6 +86,8 @@ describe('shell entry points', () => {
     expect(workflow).toContain('Publish deployment bundle');
     expect(workflow).toContain('gh release create');
     expect(workflow).toContain('seizure-diary-$VERSION.tar.gz');
+    expect(workflow).toContain('seizure-diary-installer-$VERSION.sh');
+    expect(workflow).toContain('package-installer.mjs');
     const installer = fs.readFileSync(path.join(root, 'deploy/proxmox/install.sh'), 'utf8');
     expect(installer).toContain('--type');
     expect(installer).toContain('qm create');
