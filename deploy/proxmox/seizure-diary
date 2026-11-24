@@ -41,10 +41,10 @@ Seizure Diary management command
 Usage: seizure-diary <command> [options]
 
 Commands:
-  update [--check]        Fetch and deploy the configured trusted ref. Runs as root.
-                          --check reports installed and upstream revisions only.
-  status                  Show service state, health, deployed commit and paths.
-  version                 Show application version and deployed commit.
+  update [--check]        Download and deploy the next runner-built GitHub release.
+                          Runs as root; --check reports versions only.
+  status                  Show service state, health, deployed release and paths.
+  version                 Show application version and deployed release tag.
   bootstrap-admin         Create the first admin (guest-local, hidden password prompt).
                           Extra options: --username <name> --display-label <label>
   backup [options]        Consistent SQLite backup through the app CLI.
@@ -62,15 +62,15 @@ USAGE
     ;;
   version)
     cli version
-    if [ -r "$CURRENT/.deployed-commit" ]; then
-      printf 'deployed commit: %s\n' "$(cat "$CURRENT/.deployed-commit")"
+    if [ -r "$CURRENT/.deployed-version" ]; then
+      printf 'deployed release: %s\n' "$(cat "$CURRENT/.deployed-version")"
     fi
     ;;
   status)
     load_env
     printf 'service: '
     systemctl is-active "$SERVICE_NAME" 2>/dev/null || true
-    printf 'deployed commit: %s\n' "$(cat "$CURRENT/.deployed-commit" 2>/dev/null || echo unknown)"
+    printf 'deployed release: %s\n' "$(cat "$CURRENT/.deployed-version" 2>/dev/null || echo unknown)"
     printf 'database: %s\n' "${SEIZURE_DIARY_DB_PATH:-unset}"
     printf 'backup dir: %s\n' "${BACKUP_DIR:-unset}"
     printf 'public origin: %s\n' "${PUBLIC_ORIGIN:-unset}"

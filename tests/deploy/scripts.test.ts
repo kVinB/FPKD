@@ -9,6 +9,7 @@ const scripts = [
   'deploy/proxmox/install-guest.sh',
   'deploy/proxmox/seizure-diary',
   'deploy/proxmox/update.sh',
+  'deploy/proxmox/release.mjs',
 ];
 
 describe('shell entry points', () => {
@@ -18,7 +19,9 @@ describe('shell entry points', () => {
       expect(fs.existsSync(full), script).toBe(true);
       const mode = fs.statSync(full).mode;
       expect(mode & 0o111, `${script} should be executable`).not.toBe(0);
-      const result = spawnSync('bash', ['-n', full], { encoding: 'utf8' });
+      const result = script.endsWith('.mjs')
+        ? spawnSync('node', ['--check', full], { encoding: 'utf8' })
+        : spawnSync('bash', ['-n', full], { encoding: 'utf8' });
       expect(result.status, result.stderr).toBe(0);
     }
   });
@@ -61,6 +64,32 @@ describe('shell entry points', () => {
     expect(install).not.toContain('curl | bash');
     const update = fs.readFileSync(path.join(root, 'deploy/proxmox/update.sh'), 'utf8');
     expect(update).not.toContain('git reset --hard');
+  });
+
+  it('uses runner-built GitHub release artifacts instead of guest builds', () => {
+    const installGuest = fs.readFileSync(
+      path.join(root, 'deploy/proxmox/install-guest.sh'),
+      'utf8',
+    );
+    expect(installGuest).toContain('release.mjs');
+    expect(installGuest).toContain('--token-file');
+    expect(installGuest).not.toContain('git clone');
+    expect(installGuest).not.toContain('npm ci');
+    expect(installGuest).not.toContain('build-essential');
+    const update = fs.readFileSync(path.join(root, 'deploy/proxmox/update.sh'), 'utf8');
+    expect(update).toContain('release.mjs');
+    expect(update).toContain('BACKUP_ENCRYPTION_KEY');
+    expect(update).not.toContain('npm ci');
+    expect(update).not.toContain('git fetch');
+    const workflow = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8');
+    expect(workflow).toContain('Publish deployment bundle');
+    expect(workflow).toContain('gh release create');
+    expect(workflow).toContain('seizure-diary-$VERSION.tar.gz');
+    const installer = fs.readFileSync(path.join(root, 'deploy/proxmox/install.sh'), 'utf8');
+    expect(installer).toContain('--type');
+    expect(installer).toContain('qm create');
+    expect(installer).toContain('pct create');
+    expect(installer).toContain('install-guest.sh');
   });
 
   it('ships a daily encrypted backup timer and installs it', () => {

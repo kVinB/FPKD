@@ -101,6 +101,69 @@ fi
 exit 1
 `,
   );
+  writeMock(
+    bin,
+    'qm',
+    `#!/usr/bin/env bash
+printf 'qm %s\\n' "$*" >> "$MOCK_LOG"
+case "$1" in
+  status)
+    if [ -n "\${MOCK_VM_CONFLICT_ID:-}" ] && [ "$2" = "\${MOCK_VM_CONFLICT_ID}" ]; then exit 0; fi
+    exit 1
+    ;;
+  config) printf 'unused0: local:vm-200-disk-0\\n'; exit 0 ;;
+  create|importdisk|set|resize|cloudinit|start|destroy) exit 0 ;;
+  *) exit 0 ;;
+esac
+`,
+  );
+  writeMock(
+    bin,
+    'curl',
+    `#!/usr/bin/env bash
+printf 'curl %s\\n' "$*" >> "$MOCK_LOG"
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -fsSL) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+if [ -n "$out" ]; then
+  case "$url" in
+    *SHA512SUMS) printf 'fakehash  debian-12-genericcloud-amd64.qcow2\\n' > "$out" ;;
+    *) printf 'fixture-image\\n' > "$out" ;;
+  esac
+fi
+exit 0
+`,
+  );
+  writeMock(
+    bin,
+    'sha512sum',
+    `#!/usr/bin/env bash
+printf 'sha512sum %s\\n' "$*" >> "$MOCK_LOG"
+exit 0
+`,
+  );
+  writeMock(
+    bin,
+    'ssh',
+    `#!/usr/bin/env bash
+printf 'ssh %s\\n' "$*" >> "$MOCK_LOG"
+exit 0
+`,
+  );
+  writeMock(
+    bin,
+    'scp',
+    `#!/usr/bin/env bash
+printf 'scp %s\\n' "$*" >> "$MOCK_LOG"
+exit 0
+`,
+  );
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -118,7 +181,10 @@ exit 1
     log,
     env,
     readLog: () => fs.readFileSync(log, 'utf8'),
-    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (IS_ROOT) fs.rmSync(dir, { recursive: true, force: true });
+      else spawnSync('sudo', ['-n', 'rm', '-rf', dir], { stdio: 'ignore' });
+    },
   };
 }
 
@@ -162,6 +228,8 @@ function runInstall(
 }
 
 const baseArgs = [
+  '--type',
+  'lxc',
   '--hostname',
   'test-diary',
   '--rootfs-storage',
@@ -182,7 +250,7 @@ describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
     try {
       const result = runInstall(mock, [...baseArgs, '--ctid', '210', '--yes']);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain('Seizure Diary installed in CTID 210');
+      expect(result.stdout).toContain('Seizure Diary installed in lxc 210');
       const log = mock.readLog();
       expect(log).toMatch(/pct create 210 /);
       expect(log).toContain('--unprivileged 1');
@@ -202,6 +270,8 @@ describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
     const mock = createMockEnv({ templatePresent: false });
     try {
       const result = runInstall(mock, [
+        '--type',
+        'lxc',
         '--hostname',
         'test-diary',
         '--rootfs-storage',
@@ -226,6 +296,85 @@ describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
       expect(log).not.toMatch(/pveam download/);
       expect(log).toContain('pct status 211');
     } finally {
+      mock.cleanup();
+    }
+  });
+
+  it('validates a QEMU VM dry-run without downloading or creating the VM', () => {
+    const mock = createMockEnv();
+    const keyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'seizure-diary-key-'));
+    const key = path.join(keyDir, 'id_ed25519');
+    const generated = spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
+    expect(generated.status, generated.stderr?.toString()).toBe(0);
+    try {
+      const result = runInstall(mock, [
+        '--type',
+        'vm',
+        '--vm-storage',
+        'local',
+        '--ssh-private-key',
+        key,
+        '--ip',
+        '10.20.0.10/24',
+        '--gateway',
+        '10.20.0.1',
+        '--ctid',
+        '220',
+        '--dry-run',
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Guest type         : vm');
+      expect(result.stdout).toContain('VM storage');
+      expect(result.stdout).toContain('Dry run complete');
+      const log = mock.readLog();
+      expect(log).toContain('qm status 220');
+      expect(log).not.toMatch(/qm (create|importdisk|set|resize|cloudinit|start)/);
+      expect(log).not.toMatch(/curl /);
+    } finally {
+      fs.rmSync(keyDir, { recursive: true, force: true });
+      mock.cleanup();
+    }
+  });
+
+  it('creates a QEMU VM and bootstraps it over SSH with mocked tooling', () => {
+    const mock = createMockEnv();
+    const keyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'seizure-diary-key-'));
+    const key = path.join(keyDir, 'id_ed25519');
+    const generated = spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
+    expect(generated.status, generated.stderr?.toString()).toBe(0);
+    try {
+      const result = runInstall(mock, [
+        '--type',
+        'vm',
+        '--vm-storage',
+        'local',
+        '--ssh-private-key',
+        key,
+        '--ip',
+        '10.20.0.10/24',
+        '--gateway',
+        '10.20.0.1',
+        '--ctid',
+        '221',
+        '--image-dir',
+        path.join(mock.dir, 'images'),
+        '--yes',
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Seizure Diary installed in vm 221');
+      const log = mock.readLog();
+      expect(log).toMatch(/qm create 221 /);
+      expect(log).toContain('qm importdisk 221');
+      expect(log).toMatch(/qm set 221 --scsi0/);
+      expect(log).toContain('qm resize 221 scsi0 12G');
+      expect(log).toContain('qm cloudinit update 221');
+      expect(log).toContain('qm start 221');
+      expect(log).toContain('scp ');
+      expect(log).toContain('ssh ');
+      expect(log).not.toContain('qm destroy');
+      expect(log).not.toContain('pct create');
+    } finally {
+      fs.rmSync(keyDir, { recursive: true, force: true });
       mock.cleanup();
     }
   });
@@ -273,6 +422,8 @@ describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
     const noGateway = createMockEnv();
     try {
       const result = runInstall(noGateway, [
+        '--type',
+        'lxc',
         '--rootfs-storage',
         'local',
         '--template',

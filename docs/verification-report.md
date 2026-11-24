@@ -4,10 +4,12 @@ Base commit under test: **`6e665c6`** (dependency audit, 2026-11-24).
 Synthetic data only. This report records commands and observed outcomes; it is not a
 clinical, security-certification or performance guarantee.
 
-> Snapshot note: build-version footer and automatic `YYYYMMDD.VV` tagging were added
-> after this snapshot (see README "Build versions and release tags"). The local suite
-> after that change is 110 tests; the evidence below remains the recorded
-> benchmark/browser snapshot for the listed commit.
+> Snapshot note: build-version footer, automatic `YYYYMMDD.VV` tags, the runner-built
+> GitHub Release bundle, and the Debian VM/LXC artifact installer were added after this
+> snapshot (see README and `deploy/proxmox/README.md`). The local suite after those
+> changes is 114 tests; the evidence below remains the recorded benchmark/browser
+> snapshot for the listed commit. VM/cloud-init, real-token release download and real
+> Proxmox/LAN/WireGuard checks remain unverified.
 
 ## Environment
 
@@ -68,8 +70,9 @@ as observed numbers on these machines, not universal guarantees.
 
 ## Unverified / required before real data
 
-- Real Proxmox `pct`/`pveam` installation, deploy-key pause/resume and updater on a
-  disposable guest.
+- Real Proxmox VM cloud-init/SSH and LXC `pct` provisioning, private-repository token
+  download and artifact updater on a disposable guest.
+- GitHub Release bundle creation/download with a real token and a real Proxmox guest.
 - LAN/WireGuard access allowed, external client blocked, restart persistence, encrypted
   backup restore in an isolated guest.
 - Real iPhone Safari (WebKit tests are emulation), manual VoiceOver/NVDA and 200% zoom,

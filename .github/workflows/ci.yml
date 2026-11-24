@@ -157,3 +157,50 @@ jobs:
             exit 1
           fi
           echo "Tagged $VERSION"
+
+  release:
+    name: Publish deployment bundle
+    needs: [version, tag]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.build_version }}
+          fetch-depth: 0
+      - name: Build deployment bundle in Debian 12
+        env:
+          VERSION: ${{ needs.version.outputs.build_version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/src" -w /src \
+            -e BUILD_VERSION="$VERSION" \
+            node:22.13.1-bookworm-slim \
+            bash -lc 'npm ci && npm run build && npm prune --omit=dev'
+          rm -rf bundle
+          mkdir bundle
+          cp -a dist node_modules package.json package-lock.json deploy bundle/
+          tar -czf "seizure-diary-$VERSION.tar.gz" -C bundle .
+          sha256sum "seizure-diary-$VERSION.tar.gz" > "seizure-diary-$VERSION.tar.gz.sha256"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.build_version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" \
+              "seizure-diary-$VERSION.tar.gz" \
+              "seizure-diary-$VERSION.tar.gz.sha256" \
+              --clobber
+          else
+            gh release create "$VERSION" \
+              --title "Seizure Diary $VERSION" \
+              --notes "Automated deployment bundle for $TARGET_SHA. Use synthetic data until deployment acceptance checks are complete." \
+              "seizure-diary-$VERSION.tar.gz" \
+              "seizure-diary-$VERSION.tar.gz.sha256"
+          fi
