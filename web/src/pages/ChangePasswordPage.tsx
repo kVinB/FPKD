@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { ApiError, errorFieldMap, errorMessage } from '../api';
 import { useAuth } from '../auth';
-import { ErrorSummary, StatusMessage } from '../components/ui';
+import { BuildFooter, ErrorSummary, StatusMessage } from '../components/ui';
 import { deviceTimeZone } from '../components/ui';
 import { fetchSettings, saveReportZone } from '../settingsClient';
 
@@ -159,6 +159,7 @@ export function ChangePasswordPage(): JSX.Element {
           </div>
         </form>
       </div>
+      <BuildFooter className="fixed bottom-3 right-4" />
     </main>
   );
 }

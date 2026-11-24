@@ -71,6 +71,7 @@ CSRF_SECRET="$(openssl rand -base64 32)" npm start
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run lint` | ESLint |
 | `npm run audit` | Dependency audit (fails on high/critical) |
+| `node scripts/build-version.mjs` | Print the resolved build tag |
 | `npm test` | Unit + real SQLite/API integration + deploy script checks |
 | `npm run e2e` | Production build + Playwright (Chromium desktop/mobile, axe) |
 | `npm run e2e:all` | Same with Firefox, WebKit, iPhone emulation and 320 px profile |
@@ -115,6 +116,24 @@ the application supports.
   digest/epoch-bound confirm-replace, confirmed clear-all, epoch rotation. Operator
   backups use verified encrypted SQLite snapshots.
 
+## Build versions and release tags
+
+Build tags use the UTC date and a two-digit build number: `YYYYMMDD.VV`, for example
+`20261124.01`. They are not semantic versions.
+
+- Every successful push to `main` (after the verify and Docker jobs pass) automatically
+  creates the next annotated git tag for that UTC date. The first tagged build was
+  `20261124.01`; the next same-day build becomes `.02`, and so on.
+- Pull-request builds and local development builds are not tagged. PR footers show
+  `dev-<short-sha>`; the Vite dev server shows `dev`.
+- The resolved tag is embedded at build time by `scripts/build-version.mjs` (or an
+  explicit `BUILD_VERSION` override) and displayed in the bottom-right footer on app
+  screens.
+- Docker accepts `--build-arg BUILD_VERSION=...`; CI passes the resolved tag. A native
+  build on a tagged commit uses that tag, otherwise it computes the next one for the date.
+- Tags are immutable. Do not move, delete or reuse a tag. CI creates the tag only after
+  the build and smoke checks pass; no GitHub Release is created automatically.
+
 ## Security and privacy boundary
 
 - Same-origin SPA + API, no CORS credentials, no third-party analytics, fonts or PDF
@@ -134,7 +153,7 @@ the application supports.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs:
 
-- **verify**: `npm ci`, dependency audit, typecheck, lint, 106 unit/integration/deploy
+- **verify**: `npm ci`, dependency audit, typecheck, lint, 110 unit/integration/deploy
   tests, production build, then Playwright on desktop Chromium/Firefox/WebKit, Pixel-7 and iPhone-13
   emulation, and a 320×568 Chromium profile; axe on core screens; PDF text and rendered
   page checks.
@@ -155,7 +174,7 @@ Actual commands run in this workspace and outcomes:
 npm run audit                                  # 0 vulnerabilities
 npm run typecheck                              # passed
 npm run lint                                   # passed
-npm test                                       # 106 passed
+npm test                                       # 110 passed
 npm run build                                  # passed (SPA + API/CLI bundles)
 npm run e2e                                    # 7 passed, 5 skipped (Chromium)
 E2E_BROWSERS=all PDF_RENDER=1 npm run e2e      # 20 passed, 16 skipped (per-project gating)

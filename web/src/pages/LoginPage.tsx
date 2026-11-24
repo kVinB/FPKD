@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { ApiError, errorFieldMap, errorMessage } from '../api';
 import { useAuth } from '../auth';
-import { ErrorSummary, StatusMessage } from '../components/ui';
+import { BuildFooter, ErrorSummary, StatusMessage } from '../components/ui';
 
 export function LoginPage(): JSX.Element {
   const { status, login, restricted } = useAuth();
@@ -119,6 +119,7 @@ export function LoginPage(): JSX.Element {
           </Link>
         </p>
       </div>
+      <BuildFooter className="fixed bottom-3 right-4" />
     </main>
   );
 }

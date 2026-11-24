@@ -75,6 +75,10 @@ unless run. Record actual outcomes and unverified environments.
 
 - Inspect status/diff first; preserve unrelated work; never commit secrets.
 - Use a focused feature branch and PR into `main`; wait for CI to pass.
-- Do not merge, tag or release without explicit instruction.
+- Do not merge, tag or release without explicit instruction. CI automatically creates
+  immutable `YYYYMMDD.VV` tags after successful `main` builds; do not move, delete or reuse
+  tags manually.
+- Build tags are embedded in the app footer by `scripts/build-version.mjs`; PR/dev builds
+  use `dev-*` and are not tagged.
 - Keep Proxmox/LAN/WireGuard, real-device, screen-reader and human PDF visual checks marked
   unverified until performed on the required environment.

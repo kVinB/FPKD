@@ -4,6 +4,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { BUILD_VERSION } from '../buildVersion';
 
 export interface FieldError {
   field: string;
@@ -264,6 +265,14 @@ export function useIsMobile(): boolean {
     return () => query.removeEventListener('change', listener);
   }, []);
   return isMobile;
+}
+
+export function BuildFooter({ className = '' }: { className?: string }): JSX.Element {
+  return (
+    <p className={`text-right text-xs text-slate-600 ${className}`.trim()}>
+      Build {BUILD_VERSION}
+    </p>
+  );
 }
 
 export function formatBytes(bytes: number): string {
