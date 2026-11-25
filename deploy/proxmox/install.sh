@@ -158,17 +158,6 @@ ui_yesno() {
   esac
 }
 
-ui_message() {
-  local title="$1" prompt="$2"
-  if ui_available; then
-    "$UI_WHIPTAIL" --clear --title "$UI_TITLE - $title" --msgbox "$prompt" 16 82 3>&1 1>&2 2>&3 || true
-  else
-    printf '\n%s\n%s\n' "$title" "$prompt" >&2
-    printf 'Press Enter to continue…' >&2
-    read -r _ || true
-  fi
-}
-
 next_free_id() {
   local candidate
   for candidate in $(seq 200 299); do
@@ -211,6 +200,28 @@ template_menu() {
   local default="__download__"
   if [ -n "$current" ]; then default="$current"; fi
   ui_menu "Debian template" "Choose a downloaded template or download the latest official Debian 12 template." "$default" "${pairs[@]}"
+}
+
+pveam_available_debian12() {
+  pveam available --section system 2>/dev/null |
+    awk '$2 ~ /^debian-12-standard/ {print $2}' | sort -V | tail -1
+}
+
+ensure_pveam_index() {
+  local archive
+  archive="$(pveam_available_debian12)"
+  if [ -z "$archive" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      die "no debian-12-standard template is indexed; run 'pveam update' first (dry-run does not refresh the index) and retry"
+    fi
+    printf '[install] %s\n' "Refreshing the pveam template index" >&2
+    pveam update >/dev/null 2>&1 ||
+      die "pveam update failed; run 'pveam update' on the host and retry"
+    archive="$(pveam_available_debian12)"
+  fi
+  [ -n "$archive" ] ||
+    die "no official debian-12-standard template is available from pveam after 'pveam update'"
+  printf '%s' "$archive"
 }
 
 interactive_collect() {
@@ -312,8 +323,6 @@ interactive_collect() {
     SSH_PRIVATE_KEY="$(ui_input "SSH key" "Host path to the SSH private key used for VM bootstrap" "$SSH_PRIVATE_KEY")" || die "cancelled"
     VM_USER="$(ui_input "VM user" "Cloud-init user" "$VM_USER")" || die "cancelled"
   fi
-
-  ui_message "Ready" "Seizure Diary will now create a $GUEST_TYPE guest using storage $([ "$GUEST_TYPE" = lxc ] && printf '%s' "$ROOTFS_STORAGE" || printf '%s' "$VM_STORAGE"). The app release is downloaded from GitHub; nothing is built on Proxmox."
 }
 
 usage() {
@@ -423,7 +432,7 @@ case "$GUEST_TYPE" in
   lxc)
     command -v pct >/dev/null 2>&1 || die "pct is not available; is this a Proxmox VE host?"
     command -v pveam >/dev/null 2>&1 || die "pveam is not available; is this a Proxmox VE host?"
-    [ -x "$GUEST_SCRIPT" ] || die "guest installer not found or not executable: $GUEST_SCRIPT"
+    [ -x "$GUEST_SCRIPT" ] || die "guest installer not found or not executable: $GUEST_SCRIPT. Copy the whole deploy/proxmox directory (install.sh needs install-guest.sh and release.mjs beside it) or use the single-file seizure-diary-installer-<tag>.sh release asset."
     ;;
   *)
     die "--type must be vm or lxc"
@@ -546,8 +555,7 @@ if [ "$GUEST_TYPE" = "lxc" ]; then
       else
         die "no downloaded Debian 12 template found; pass --template-storage (available: ${VZTMPL_STORAGES[*]:-none})"
       fi
-      TEMPLATE_ARCHIVE="$(pveam available --section system 2>/dev/null | awk '$2 ~ /^debian-12-standard/ {print $2}' | sort -V | tail -1)"
-      [ -n "$TEMPLATE_ARCHIVE" ] || die "no official debian-12-standard template is available from pveam"
+      TEMPLATE_ARCHIVE="$(ensure_pveam_index)"
       TEMPLATE_VOLID="$TEMPLATE_STORAGE:vztmpl/$TEMPLATE_ARCHIVE"
       TEMPLATE_NEEDS_DOWNLOAD="1"
     fi
@@ -678,7 +686,7 @@ run_guest_installer_vm() {
 }
 
 if [ "$GUEST_TYPE" = "lxc" ]; then
-  [ -x "$GUEST_SCRIPT" ] || die "guest installer not found: $GUEST_SCRIPT"
+  [ -x "$GUEST_SCRIPT" ] || die "guest installer not found: $GUEST_SCRIPT. Copy the whole deploy/proxmox directory or use the single-file installer."
   if [ "$TEMPLATE_NEEDS_DOWNLOAD" = "1" ]; then
     log "Downloading template $TEMPLATE_ARCHIVE to $TEMPLATE_STORAGE"
     pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_ARCHIVE" || die "template download failed"

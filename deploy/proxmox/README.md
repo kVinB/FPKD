@@ -3,7 +3,9 @@
 This directory installs **Seizure Diary** on Proxmox VE from a prebuilt GitHub
 release. The guided installer defaults to an unprivileged **Debian 12 LXC**; a
 dedicated **Debian 12 QEMU VM** is also selectable. The interactive flow asks for
-the Proxmox storage ID, template storage, bridge, network and credentials.
+the Proxmox storage ID, template storage, bridge, network and credentials. The
+installer validates the collected values only after the prompts, prints the
+summary, and asks for a final confirmation before creating anything.
 
 Application builds happen on **GitHub Actions runners**, not on the Proxmox host
 or guest. A successful `main` build creates the next `YYYYMMDD.VV` tag and
@@ -54,7 +56,10 @@ The bundle contains `dist/`, production `node_modules/`, `package.json`,
 1. Proxmox VE 8.x host with `pvesm` and either `qm` (VM) or `pct`/`pveam` (LXC).
 2. Storage validation is explicit; the installer never assumes IDs:
    - VM: storage with `images` content plus a writable cloud-image cache directory.
-   - LXC: storage with `rootdir` and `vztmpl` content.
+   - LXC: storage with `rootdir` and `vztmpl` content. When no Debian 12 template
+     is already downloaded, the installer runs `pveam update`, then downloads the
+     latest official `debian-12-standard` template. Run `pveam update` manually
+     first if the host cannot reach the Proxmox template mirrors.
 3. VM only: a static IPv4/prefix + gateway, and an SSH private key readable by the
    host installer. Its public key is injected through cloud-init.
 4. Outbound HTTPS from the guest to GitHub (release API/assets) and
@@ -79,8 +84,11 @@ sudo bash /root/seizure-diary-install.sh
 
 The script asks for LXC (default) or VM, the Proxmox **storage ID**, template
 storage, bridge, network, release version and token. It verifies its embedded
-scripts before running. To use the multi-file source instead, copy this directory
-to the host and run `install.sh` with flags.
+scripts before running. To use the multi-file source instead, copy the whole
+`deploy/proxmox/` directory to the host and run `install.sh` with flags;
+`install.sh` needs `install-guest.sh` and `release.mjs` in the same directory.
+Copying only `install.sh` fails with “guest installer not found or not
+executable”.
 
 LXC (default in the guided flow):
 
@@ -114,14 +122,31 @@ sudo ./deploy/proxmox/install.sh \
 ```
 
 Use `--dry-run` to validate and print the summary without downloading images,
-creating guests or starting anything. The installer never reuses or destroys a
-guest ID, and does not modify host packages, firewall, networking, cluster
-configuration or reverse proxies. It downloads and SHA-512 verifies the official
-Debian 12 genericcloud image for VM installs.
+creating guests or starting anything. For LXC, a dry run does not refresh the
+`pveam` index: if no Debian 12 template is downloaded and the index is empty, it
+fails with an instruction to run `pveam update` first. The installer never reuses
+or destroys a guest ID, and does not modify host packages, firewall, networking,
+cluster configuration or reverse proxies. It downloads and SHA-512 verifies the
+official Debian 12 genericcloud image for VM installs.
 
 VM bootstrap waits for SSH on the static address and uses `sudo -n` as the
 cloud-init user (`debian` by default). The VM is left in place on failure; inspect
 its console with `qm terminal <vmid>`.
+
+### Troubleshooting a failed run
+
+- `pveam list` shows only templates already downloaded. With no downloaded
+  Debian 12 template, the installer refreshes the index with `pveam update` and
+  then runs `pveam download`. If `pveam update` fails, the installer stops with
+  an actionable error; run it manually on the host and retry.
+- Validation happens after the guided prompts. A failure prints to stderr and
+  exits non-zero. The install summary and final confirmation are the only
+  go/no-go gate; there is no earlier “Ready” message.
+- Capture the full trace when diagnosing a failure:
+  `sudo bash -x ./deploy/proxmox/install.sh ... 2>&1 | tee /tmp/install.log`
+- The script never destroys a guest or container. If a run fails after creation,
+  inspect `pct status <id>` / `qm status <id>` and remove it manually only after
+  reviewing the error.
 
 ## Step 2 — first admin and configuration
 

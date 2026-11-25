@@ -79,7 +79,16 @@ family data.
 - [ ] GitHub Actions produced a `YYYYMMDD.VV` tag and a release asset
       `seizure-diary-<tag>.tar.gz` with a matching `.sha256`.
 - [ ] `install.sh --dry-run --type vm ...` and `--type lxc ...` show the summary and make
-      no changes or downloads.
+      no changes or downloads. With no downloaded LXC template and an empty `pveam`
+      index, the LXC dry run fails with a clear `pveam update` instruction.
+- [ ] The multi-file source path contains `install.sh`, `install-guest.sh` and
+      `release.mjs`; copying only `install.sh` fails with an actionable companion-file
+      error. The single-file release installer runs standalone.
+- [ ] With no downloaded LXC template, the installer runs `pveam update` and then
+      `pveam download`; an update failure stops with an actionable error. An already
+      downloaded template skips both.
+- [ ] Installer validation errors print to stderr and exit non-zero; the summary and
+      final confirmation are the only go/no-go gate (no earlier “Ready” message).
 - [ ] Fresh VM install creates the Debian cloud VM, cloud-init/SSH bootstrap succeeds, and
       the guest does not install Git/compiler build prerequisites.
 - [ ] Fresh LXC install completes without Docker, nesting or a privileged container.
