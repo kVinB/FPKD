@@ -18,6 +18,8 @@ interface MockOptions {
   rootdirStorages?: string[];
   bridgeExists?: boolean;
   conflictId?: string;
+  pveamIndexEmpty?: boolean;
+  pveamUpdateFails?: boolean;
 }
 
 interface MockEnv {
@@ -67,7 +69,15 @@ case "$1" in
     exit 0
     ;;
   available)
+    if [ "\${MOCK_PVEAM_INDEX_EMPTY:-0}" = "1" ] && [ ! -f "\${MOCK_PVEAM_INDEX_FILE}" ]; then
+      exit 0
+    fi
     printf 'system  debian-12-standard_12.7-1_amd64.tar.zst\\n'
+    exit 0
+    ;;
+  update)
+    if [ "\${MOCK_PVEAM_UPDATE_FAILS:-0}" = "1" ]; then exit 1; fi
+    [ -n "\${MOCK_PVEAM_INDEX_FILE:-}" ] && : > "\${MOCK_PVEAM_INDEX_FILE}"
     exit 0
     ;;
   download) exit 0 ;;
@@ -241,6 +251,9 @@ esac
     MOCK_BRIDGE_EXISTS: options.bridgeExists === false ? '0' : '1',
     WHIPTAIL: path.join(bin, 'whiptail'),
     SEIZURE_DIARY_FORCE_UI: '1',
+    MOCK_PVEAM_INDEX_EMPTY: options.pveamIndexEmpty ? '1' : '0',
+    MOCK_PVEAM_UPDATE_FAILS: options.pveamUpdateFails ? '1' : '0',
+    MOCK_PVEAM_INDEX_FILE: path.join(dir, 'pveam-index-refreshed'),
     ...(options.conflictId ? { MOCK_CONFLICT_ID: options.conflictId } : {}),
   };
 
@@ -269,6 +282,9 @@ function runInstall(
     'MOCK_BRIDGE_EXISTS',
     'WHIPTAIL',
     'SEIZURE_DIARY_FORCE_UI',
+    'MOCK_PVEAM_INDEX_EMPTY',
+    'MOCK_PVEAM_UPDATE_FAILS',
+    'MOCK_PVEAM_INDEX_FILE',
     ...(mock.env.MOCK_CONFLICT_ID ? ['MOCK_CONFLICT_ID'] : []),
   ];
   const result = IS_ROOT
@@ -306,6 +322,23 @@ const baseArgs = [
   'local',
   '--template',
   TEMPLATE,
+  '--bridge',
+  'vmbr0',
+  '--ip',
+  '10.20.0.10/24',
+  '--gateway',
+  '10.20.0.1',
+];
+
+const noTemplateArgs = [
+  '--type',
+  'lxc',
+  '--hostname',
+  'test-diary',
+  '--rootfs-storage',
+  'local',
+  '--template-storage',
+  'local',
   '--bridge',
   'vmbr0',
   '--ip',
@@ -530,6 +563,67 @@ describe.skipIf(!CAN_RUN)('Proxmox host installer safe paths', () => {
       expect(`${result.stdout}${result.stderr}`).toContain('--gateway is required');
     } finally {
       noGateway.cleanup();
+    }
+  });
+
+  it('refreshes the pveam index when no template is downloaded', () => {
+    const mock = createMockEnv({ templatePresent: false, pveamIndexEmpty: true });
+    try {
+      const result = runInstall(mock, [...noTemplateArgs, '--ctid', '215', '--yes']);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Seizure Diary installed in lxc 215');
+      const log = mock.readLog();
+      expect(log).toContain('pveam update');
+      expect(log).toContain('pveam download local debian-12-standard_12.7-1_amd64.tar.zst');
+      expect(log).toMatch(/pct create 215 /);
+    } finally {
+      mock.cleanup();
+    }
+  });
+
+  it('dry-run fails without refreshing the pveam index', () => {
+    const mock = createMockEnv({ templatePresent: false, pveamIndexEmpty: true });
+    try {
+      const result = runInstall(mock, [...noTemplateArgs, '--ctid', '216', '--dry-run']);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain('pveam update');
+      const log = mock.readLog();
+      expect(log).not.toContain('pveam update');
+      expect(log).not.toMatch(/pveam download/);
+      expect(log).not.toMatch(/pct (create|start|push|exec|destroy)/);
+    } finally {
+      mock.cleanup();
+    }
+  });
+
+  it('skips pveam update when a template is already downloaded', () => {
+    const mock = createMockEnv();
+    try {
+      const result = runInstall(mock, [...baseArgs, '--ctid', '217', '--yes']);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Seizure Diary installed in lxc 217');
+      const log = mock.readLog();
+      expect(log).not.toContain('pveam update');
+      expect(log).not.toContain('pveam download');
+      expect(log).toMatch(/pct create 217 /);
+    } finally {
+      mock.cleanup();
+    }
+  });
+
+  it('reports a clear error when pveam update fails', () => {
+    const mock = createMockEnv({
+      templatePresent: false,
+      pveamIndexEmpty: true,
+      pveamUpdateFails: true,
+    });
+    try {
+      const result = runInstall(mock, [...noTemplateArgs, '--ctid', '218', '--yes']);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain('pveam update failed');
+      expect(mock.readLog()).not.toMatch(/pveam download/);
+    } finally {
+      mock.cleanup();
     }
   });
 });
